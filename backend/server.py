@@ -9,7 +9,7 @@ import os
 import uuid
 import random
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, UploadFile, File, Form
@@ -24,6 +24,11 @@ from auth_utils import (
 )
 from storage_utils import init_storage, put_object, get_object, APP_NAME
 from llm_utils import moderate_item
+from helpers import (
+    admin_email, admin_password, is_admin, make_token, now_utc,
+    send_dev_email, build_receipt_pdf, EMAIL_LOG,
+)
+import asyncio
 
 from emergentintegrations.payments.stripe.checkout import (
     StripeCheckout, CheckoutSessionRequest,
@@ -107,8 +112,29 @@ def item_to_public(doc, viewer_id=None):
     }
 
 
+def serialize_user(user_doc: dict) -> dict:  # override (also include role/banned)
+    from auth_utils import serialize_user as _orig
+    base = _orig(user_doc)
+    base.update({
+        "role": user_doc.get("role", "user"),
+        "banned": bool(user_doc.get("banned", False)),
+        "email_verified": bool(user_doc.get("email_verified", False)),
+    })
+    return base
+
+
 async def auth_user(request: Request):
-    return await get_current_user(request, db)
+    user = await get_current_user(request, db)
+    if user.get("banned"):
+        raise HTTPException(403, "Account suspended. Contact safety@expiremate.com.")
+    return user
+
+
+async def require_admin(request: Request):
+    user = await auth_user(request)
+    if not is_admin(user):
+        raise HTTPException(403, "Admin only")
+    return user
 
 
 # ---------- Auth ----------
@@ -446,7 +472,289 @@ async def stripe_webhook(request: Request):
     return {"ok": True}
 
 
-# ---------- Donations stats ----------
+# ---------- Auth extras: email verification + password reset (MOCK email) ----------
+class EmailIn(BaseModel):
+    email: EmailStr
+
+
+class ResetIn(BaseModel):
+    token: str
+    new_password: str = Field(min_length=6)
+
+
+class TokenIn(BaseModel):
+    token: str
+
+
+@api.post("/auth/send-verification")
+async def send_verification(request: Request):
+    user = await auth_user(request)
+    if user.get("email_verified"):
+        return {"ok": True, "already_verified": True}
+    token = make_token("ev")
+    await db.email_tokens.insert_one({
+        "user_id": user["_id"], "token": token, "purpose": "verify_email",
+        "expires_at": (now_utc() + timedelta(hours=24)).isoformat(),
+        "used": False, "created_at": now_iso(),
+    })
+    link = f"{os.environ.get('FRONTEND_URL', '')}/verify-email?token={token}"
+    send_dev_email(user["email"], "Verify your ExpireMate email",
+                   "Click the link to verify your account.", link=link)
+    return {"ok": True, "dev_link": link}
+
+
+@api.post("/auth/verify-email")
+async def verify_email(body: TokenIn):
+    tk = await db.email_tokens.find_one({"token": body.token, "purpose": "verify_email", "used": False})
+    if not tk:
+        raise HTTPException(400, "Invalid or already-used token")
+    if tk["expires_at"] < now_utc().isoformat():
+        raise HTTPException(400, "Token expired")
+    await db.email_tokens.update_one({"_id": tk["_id"]}, {"$set": {"used": True}})
+    await db.users.update_one({"_id": tk["user_id"]}, {"$set": {"email_verified": True}})
+    return {"ok": True}
+
+
+@api.post("/auth/forgot-password")
+async def forgot_password(body: EmailIn):
+    user = await db.users.find_one({"email": body.email.lower()})
+    if user:
+        token = make_token("pr")
+        await db.email_tokens.insert_one({
+            "user_id": user["_id"], "token": token, "purpose": "password_reset",
+            "expires_at": (now_utc() + timedelta(hours=1)).isoformat(),
+            "used": False, "created_at": now_iso(),
+        })
+        link = f"{os.environ.get('FRONTEND_URL', '')}/reset-password?token={token}"
+        send_dev_email(user["email"], "Reset your ExpireMate password",
+                       "Click the link to choose a new password (expires in 1 hour).", link=link)
+        return {"ok": True, "dev_link": link}
+    return {"ok": True}  # don't leak existence
+
+
+@api.post("/auth/reset-password")
+async def reset_password(body: ResetIn):
+    tk = await db.email_tokens.find_one({"token": body.token, "purpose": "password_reset", "used": False})
+    if not tk:
+        raise HTTPException(400, "Invalid or already-used token")
+    if tk["expires_at"] < now_utc().isoformat():
+        raise HTTPException(400, "Token expired")
+    await db.email_tokens.update_one({"_id": tk["_id"]}, {"$set": {"used": True}})
+    await db.users.update_one(
+        {"_id": tk["user_id"]},
+        {"$set": {"password_hash": hash_password(body.new_password)}},
+    )
+    return {"ok": True}
+
+
+# ---------- Chat (poster <-> claimer per item) ----------
+class ChatIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+def _can_chat(item: dict, user_id: str) -> bool:
+    return (str(item["owner_id"]) == user_id or
+            (item.get("claimed_by") and str(item["claimed_by"]) == user_id))
+
+
+@api.get("/items/{item_id}/messages")
+async def list_messages(item_id: str, request: Request):
+    user = await auth_user(request)
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    item = await db.items.find_one({"_id": oid})
+    if not item:
+        raise HTTPException(404, "Not found")
+    if not _can_chat(item, str(user["_id"])):
+        raise HTTPException(403, "Not authorized to view this thread")
+    msgs = await db.messages.find({"item_id": oid}).sort("created_at", 1).to_list(500)
+    return {
+        "messages": [{
+            "id": str(m["_id"]),
+            "from_user_id": str(m["from_user_id"]),
+            "from_name": m.get("from_name", ""),
+            "text": m["text"],
+            "created_at": m["created_at"],
+        } for m in msgs]
+    }
+
+
+@api.post("/items/{item_id}/messages")
+async def post_message(item_id: str, body: ChatIn, request: Request):
+    user = await auth_user(request)
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    item = await db.items.find_one({"_id": oid})
+    if not item:
+        raise HTTPException(404, "Not found")
+    if item.get("status") not in ("claimed", "active"):
+        raise HTTPException(400, "Thread closed")
+    if not _can_chat(item, str(user["_id"])):
+        raise HTTPException(403, "Only poster or claimer can chat here")
+    # Basic PII scrub — strip US phone numbers
+    import re
+    safe = re.sub(r"(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}", "[redacted phone]", body.text)
+    doc = {
+        "item_id": oid, "from_user_id": user["_id"],
+        "from_name": user.get("name", ""), "text": safe.strip(),
+        "created_at": now_iso(),
+    }
+    r = await db.messages.insert_one(doc)
+    doc["_id"] = r.inserted_id
+    return {"message": {
+        "id": str(r.inserted_id), "from_user_id": str(user["_id"]),
+        "from_name": user.get("name", ""), "text": safe.strip(),
+        "created_at": doc["created_at"],
+    }}
+
+
+# ---------- Tax-receipt PDFs ----------
+@api.get("/me/donations")
+async def my_donations(request: Request):
+    user = await auth_user(request)
+    rows = await db.payment_transactions.find({
+        "user_id": user["_id"], "purpose": "donation", "payment_status": "paid",
+    }).sort("created_at", -1).to_list(200)
+    return {
+        "donations": [{
+            "session_id": r["session_id"],
+            "amount": r["amount"],
+            "currency": r.get("currency", "usd"),
+            "created_at": r.get("created_at"),
+            "paid_at": r.get("updated_at") or r.get("created_at"),
+        } for r in rows]
+    }
+
+
+@api.get("/donations/{session_id}/receipt")
+async def receipt_pdf(session_id: str, request: Request):
+    user = await auth_user(request)
+    tx = await db.payment_transactions.find_one({"session_id": session_id})
+    if not tx or tx.get("purpose") != "donation" or tx.get("payment_status") != "paid":
+        raise HTTPException(404, "Donation not found")
+    if tx.get("user_id") and str(tx["user_id"]) != str(user["_id"]) and not is_admin(user):
+        raise HTTPException(403, "Not your donation")
+    pdf = build_receipt_pdf(
+        donor_name=user.get("name", ""),
+        donor_email=user.get("email", ""),
+        amount=float(tx["amount"]),
+        currency=tx.get("currency", "usd"),
+        session_id=session_id,
+        paid_at=tx.get("updated_at") or tx.get("created_at") or "",
+    )
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="expiremate-receipt-{session_id[:10]}.pdf"'})
+
+
+# ---------- Admin ----------
+@api.get("/admin/overview")
+async def admin_overview(request: Request):
+    await require_admin(request)
+    users = await db.users.count_documents({})
+    items = await db.items.count_documents({})
+    active = await db.items.count_documents({"status": "active"})
+    reports = await db.reports.count_documents({})
+    banned = await db.users.count_documents({"banned": True})
+    don = await db.payment_transactions.count_documents({"purpose": "donation", "payment_status": "paid"})
+    return {"users": users, "items": items, "active_items": active,
+            "reports": reports, "banned": banned, "donations": don}
+
+
+@api.get("/admin/reports")
+async def admin_reports(request: Request):
+    await require_admin(request)
+    rows = await db.reports.find({}).sort("created_at", -1).to_list(200)
+    out = []
+    for r in rows:
+        item = await db.items.find_one({"_id": r["item_id"]}) if r.get("item_id") else None
+        reporter = await db.users.find_one({"_id": r["reporter_id"]})
+        out.append({
+            "id": str(r["_id"]),
+            "reason": r.get("reason", ""),
+            "created_at": r.get("created_at"),
+            "item": item_to_public(item) if item else None,
+            "reporter_email": reporter.get("email") if reporter else None,
+        })
+    return {"reports": out}
+
+
+@api.get("/admin/users")
+async def admin_users(request: Request):
+    await require_admin(request)
+    rows = await db.users.find({}).sort("created_at", -1).to_list(500)
+    return {"users": [serialize_user(u) for u in rows]}
+
+
+@api.post("/admin/users/{user_id}/ban")
+async def admin_ban(user_id: str, request: Request):
+    await require_admin(request)
+    try:
+        oid = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    user = await db.users.find_one({"_id": oid})
+    if not user:
+        raise HTTPException(404, "User not found")
+    if user.get("email") == admin_email():
+        raise HTTPException(400, "Cannot ban the admin")
+    await db.users.update_one({"_id": oid}, {"$set": {"banned": True}})
+    return {"ok": True}
+
+
+@api.post("/admin/users/{user_id}/unban")
+async def admin_unban(user_id: str, request: Request):
+    await require_admin(request)
+    try:
+        oid = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    await db.users.update_one({"_id": oid}, {"$set": {"banned": False}})
+    return {"ok": True}
+
+
+@api.delete("/admin/items/{item_id}")
+async def admin_delete_item(item_id: str, request: Request):
+    await require_admin(request)
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    await db.items.update_one({"_id": oid}, {"$set": {"status": "removed"}})
+    return {"ok": True}
+
+
+@api.get("/admin/emails")
+async def admin_emails(request: Request):
+    await require_admin(request)
+    return {"emails": EMAIL_LOG[:50]}
+
+
+# ---------- Auto-expire background loop ----------
+_auto_expire_task = None
+
+
+async def _auto_expire_loop():
+    while True:
+        try:
+            today = now_utc().date().isoformat()
+            # Mark items whose expiration_date < today as expired (active or claimed)
+            res = await db.items.update_many(
+                {"status": {"$in": ["active", "claimed"]},
+                 "expiration_date": {"$lt": today}},
+                {"$set": {"status": "expired", "expired_at": now_iso()}},
+            )
+            if res.modified_count:
+                logger.info(f"[auto-expire] marked {res.modified_count} items expired")
+        except Exception as e:
+            logger.error(f"[auto-expire] {e}")
+        await asyncio.sleep(30 * 60)  # 30 minutes
+
+
+
 @api.get("/donations/stats")
 async def donation_stats():
     pipeline = [
@@ -503,24 +811,54 @@ async def on_startup():
     await db.items.create_index("status")
     await db.items.create_index("category")
     await db.items.create_index("zip_code")
+    await db.items.create_index("expiration_date")
     await db.payment_transactions.create_index("session_id", unique=True)
+    await db.messages.create_index([("item_id", 1), ("created_at", 1)])
+    await db.email_tokens.create_index("token", unique=True)
     init_storage()
+
+    admin_em = admin_email()
+    if not await db.users.find_one({"email": admin_em}):
+        await db.users.insert_one({
+            "email": admin_em,
+            "password_hash": hash_password(admin_password()),
+            "name": "ExpireMate Admin",
+            "zip_code": "",
+            "verified": True,
+            "email_verified": True,
+            "role": "admin",
+            "created_at": now_iso(),
+        })
+        logger.info(f"[seed] admin created: {admin_em}")
+    else:
+        await db.users.update_one(
+            {"email": admin_em},
+            {"$set": {"role": "admin", "verified": True, "email_verified": True}},
+        )
+
+    global _auto_expire_task
+    _auto_expire_task = asyncio.create_task(_auto_expire_loop())
+
     try:
         Path("/app/memory").mkdir(exist_ok=True)
-        creds = """# ExpireMate Test Credentials
+        creds = f"""# ExpireMate Test Credentials
+
+## Admin
+- {admin_em} / {admin_password()}  (login at /login, then visit /admin)
 
 ## Test Users (created during testing)
-- Test user: testuser@expiremate.com / Test1234
+- testuser@expiremate.com / Test1234
 
 ## Auth Endpoints
 - POST /api/auth/register
 - POST /api/auth/login
 - POST /api/auth/logout
 - GET  /api/auth/me
+- POST /api/auth/forgot-password / /api/auth/reset-password
+- POST /api/auth/send-verification / /api/auth/verify-email
 
 Cookies: access_token (httpOnly, samesite=none, secure=true)
-For testing without cross-site cookies, the API also returns `token` in the JSON
-response and accepts `Authorization: Bearer <token>` headers.
+Also accepts `Authorization: Bearer <token>` headers.
 """
         Path("/app/memory/test_credentials.md").write_text(creds)
     except Exception as e:

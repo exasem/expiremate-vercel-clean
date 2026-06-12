@@ -7,15 +7,45 @@ import Footer from "@/components/Footer";
 import ItemCard from "@/components/ItemCard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { ShieldCheck, ShieldOff, Plus } from "lucide-react";
+import { ShieldCheck, ShieldOff, Plus, Download, Mail } from "lucide-react";
+import { API } from "@/lib/api";
+import { toast } from "sonner";
 
 export default function DashboardPage() {
   const { user } = useAuth();
   const [data, setData] = useState({ posts: [], claims: [] });
+  const [donations, setDonations] = useState([]);
+  const [sendingVerify, setSendingVerify] = useState(false);
 
   useEffect(() => {
     api.get("/me/items").then((r) => setData(r.data)).catch(() => {});
+    api.get("/me/donations").then((r) => setDonations(r.data.donations)).catch(() => {});
   }, []);
+
+  const sendEmailVerify = async () => {
+    setSendingVerify(true);
+    try {
+      const { data: r } = await api.post("/auth/send-verification");
+      if (r.already_verified) toast.success("Email already verified.");
+      else toast.success("Verification email sent! (Check the admin Outbox in dev mode.)");
+    } catch (e) { toast.error("Could not send"); }
+    finally { setSendingVerify(false); }
+  };
+
+  const downloadReceipt = (sid) => {
+    const token = localStorage.getItem("em_token");
+    const url = `${API}/donations/${sid}/receipt${token ? `?_=${Date.now()}` : ""}`;
+    // Use fetch with bearer to get the PDF blob, then trigger download
+    fetch(url, { credentials: "include", headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      .then((res) => res.ok ? res.blob() : Promise.reject(res))
+      .then((blob) => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `expiremate-receipt-${sid.slice(0, 10)}.pdf`;
+        a.click();
+      })
+      .catch(() => toast.error("Could not download receipt"));
+  };
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -33,7 +63,15 @@ export default function DashboardPage() {
               )}
             </p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-3 flex-wrap">
+            {!user?.email_verified && (
+              <Button data-testid="dashboard-send-email-verify"
+                onClick={sendEmailVerify} disabled={sendingVerify}
+                variant="outline" className="rounded-full border-em-border">
+                <Mail className="w-4 h-4 mr-1" />
+                {sendingVerify ? "Sending…" : "Verify email"}
+              </Button>
+            )}
             {!user?.verified && (
               <Link to="/verify">
                 <Button data-testid="dashboard-verify-button" className="rounded-full bg-em-secondary hover:bg-em-secondaryHover text-white">
@@ -57,6 +95,9 @@ export default function DashboardPage() {
             <TabsTrigger value="claims" data-testid="dashboard-tab-claims" className="rounded-full data-[state=active]:bg-em-primary data-[state=active]:text-white">
               My claims ({data.claims.length})
             </TabsTrigger>
+            <TabsTrigger value="donations" data-testid="dashboard-tab-donations" className="rounded-full data-[state=active]:bg-em-primary data-[state=active]:text-white">
+              Donations ({donations.length})
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="posts" className="mt-6">
@@ -75,6 +116,28 @@ export default function DashboardPage() {
             ) : (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
                 {data.claims.map((i) => <ItemCard key={i.id} item={i} />)}
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="donations" className="mt-6">
+            {donations.length === 0 ? (
+              <div className="em-card p-12 text-center text-em-textSoft">No donations yet — <Link to="/donate" className="text-em-primary font-semibold">support the founder</Link>.</div>
+            ) : (
+              <div className="em-card divide-y divide-em-border">
+                {donations.map((d) => (
+                  <div key={d.session_id} data-testid={`donation-row-${d.session_id}`} className="p-4 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-heading text-lg font-semibold">${d.amount.toFixed(2)} <span className="text-xs text-em-textSoft uppercase">{d.currency}</span></div>
+                      <div className="text-xs text-em-textSoft">{d.paid_at}</div>
+                    </div>
+                    <Button data-testid={`donation-receipt-${d.session_id}`}
+                      onClick={() => downloadReceipt(d.session_id)}
+                      variant="outline" className="rounded-full border-em-border">
+                      <Download className="w-4 h-4 mr-1" /> Receipt
+                    </Button>
+                  </div>
+                ))}
               </div>
             )}
           </TabsContent>

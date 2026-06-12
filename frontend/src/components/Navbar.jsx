@@ -66,6 +66,9 @@ export default function Navbar() {
                 {!user.verified && (
                   <DropdownMenuItem data-testid="menu-verify" onClick={() => nav("/verify")}>Verify ID ($2)</DropdownMenuItem>
                 )}
+                {user.role === "admin" && (
+                  <DropdownMenuItem data-testid="menu-admin" onClick={() => nav("/admin")}>Admin panel</DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem data-testid="menu-logout" onClick={async () => { await logout(); nav("/"); }}>
                   Log out

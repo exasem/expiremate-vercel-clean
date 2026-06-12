@@ -17,6 +17,10 @@ import PaymentSuccessPage from "@/pages/PaymentSuccessPage";
 import LeaderboardPage from "@/pages/LeaderboardPage";
 import HowItWorksPage from "@/pages/HowItWorksPage";
 import SafetyPage from "@/pages/SafetyPage";
+import AdminPage from "@/pages/AdminPage";
+import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
+import ResetPasswordPage from "@/pages/ResetPasswordPage";
+import VerifyEmailPage from "@/pages/VerifyEmailPage";
 
 function App() {
   return (
@@ -34,6 +38,10 @@ function App() {
             <Route path="/how-it-works" element={<HowItWorksPage />} />
             <Route path="/safety" element={<SafetyPage />} />
             <Route path="/payment-success" element={<PaymentSuccessPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/verify-email" element={<VerifyEmailPage />} />
+            <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
             <Route path="/post" element={<ProtectedRoute><PostItemPage /></ProtectedRoute>} />
             <Route path="/verify" element={<ProtectedRoute><VerifyPage /></ProtectedRoute>} />
             <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />

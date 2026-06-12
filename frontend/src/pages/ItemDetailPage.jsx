@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Clock, MapPin, Tag, ShieldCheck, AlertTriangle, Flag } from "lucide-react";
 import { toast } from "sonner";
+import ItemChat from "@/components/ItemChat";
 
 export default function ItemDetailPage() {
   const { id } = useParams();
@@ -176,6 +177,11 @@ export default function ItemDetailPage() {
             </div>
           </div>
         </div>
+
+        {/* Chat: visible to owner & claimer once item is claimed */}
+        {user && (item.is_owner || item.is_claimer) && item.status !== "active" && (
+          <ItemChat itemId={item.id} currentUserId={user.id} />
+        )}
       </main>
       <Footer />
     </div>
