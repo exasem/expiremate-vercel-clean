@@ -780,15 +780,16 @@ async def _notify_zip_subscribers(item: dict):
         try:
             html = render_zip_alert(item_title=title, item_url=item_url,
                                     category=category, days_left=days, zip_code=zip_code)
-            send_email(to=user["email"], subject=f"New {category} in {zip_code} — expires soon",
-                       html=html, link=item_url)
+            await asyncio.to_thread(send_email, to=user["email"],
+                                    subject=f"New {category} in {zip_code} — expires soon",
+                                    html=html, link=item_url)
         except Exception as e:
             logger.warning(f"zip email failed: {e}")
 
     # Web push
     async for push_sub in db.push_subscriptions.find({"zip_codes": zip_code}):
         try:
-            send_push(push_sub["subscription"], {
+            await asyncio.to_thread(send_push, push_sub["subscription"], {
                 "title": f"New item in {zip_code}",
                 "body": f"{title} ({category}) — expires {'in ' + str(days) + 'd' if days > 0 else 'today'}",
                 "url": f"/items/{item['_id']}",
@@ -1061,6 +1062,7 @@ async def on_startup():
     await db.items.create_index("category")
     await db.items.create_index("zip_code")
     await db.items.create_index("expiration_date")
+    await db.items.create_index("photo_hash", sparse=True)
     await db.payment_transactions.create_index("session_id", unique=True)
     await db.messages.create_index([("item_id", 1), ("created_at", 1)])
     await db.email_tokens.create_index("token", unique=True)

@@ -18,33 +18,40 @@ A hyperlocal community platform where verified neighbors give unexpired-but-soon
 - **Domain model**: users, items, payment_transactions, reports
 
 ## What's been implemented (Feb 2026)
-- ✅ JWT auth: register / login / logout / me + password hashing
-- ✅ Email verification + password reset (Resend MOCKED — dev_link returned + admin outbox)
-- ✅ Items: post (multipart photo + AI moderation), list with filters, detail
-- ✅ Claim flow: 4-digit claim code, owner-confirm endpoint, state machine
-- ✅ In-app chat between poster + claimer (5s polling, PII phone scrub, thread closes on completion)
-- ✅ Reports endpoint
-- ✅ Stripe verify ($2) + donate ($3/$5/$10/custom) checkout + status polling + webhook
-- ✅ Donation thermometer + donor leaderboard + per-user donations history + tax receipt PDF download
+- ✅ JWT auth, registration, login, logout, /me + email verification + password reset
+- ✅ Real Resend email integration (key wired) — receipts, password reset, ZIP alerts, verify
+- ✅ Items: post (photo + AI moderation + SHA-256 photo dedup), list/filter, detail, bump-to-top (24h cooldown)
+- ✅ Claim flow: 4-digit code, owner confirms, state machine
+- ✅ In-app chat between poster + claimer (PII phone scrub, 5s polling)
+- ✅ Reports + admin moderation dashboard
+- ✅ Real Stripe Identity verification (replaces $2 fee — actual ID document upload via Stripe-hosted page)
+- ✅ Stripe donations ($3/$5/$10/custom) + checkout + status polling + tax-receipt PDFs
+- ✅ Donation thermometer + donor leaderboard + Donor-of-the-month spotlight
 - ✅ Image upload + public /api/files/{path} serve
-- ✅ Admin dashboard: overview, reports (with remove-item), users (ban/unban), email outbox
+- ✅ Admin dashboard: overview, reports, users (ban/unban), email outbox
 - ✅ Auto-expire background task (FastAPI in-process, every 30min)
-- ✅ Frontend: 18 routes — Home, Browse, ItemDetail, Post, Dashboard, Donate, Verify, PaymentSuccess, Leaderboard, HowItWorks, Safety, Login, Register, Forgot/Reset/VerifyEmail, Admin
-- ✅ Safety disclaimer + 18+ checkbox
-- ✅ Mobile-responsive
-- ✅ Tests: 56/56 passing (34 MVP regression + 22 iter-2 features)
+- ✅ Impact counter (items rescued total / this week / pounds saved) on homepage
+- ✅ Streak badges on dashboard (first rescue, 5/25 saved, donor, verified)
+- ✅ Share buttons (Twitter, SMS, copy link) on item detail
+- ✅ Tip Jar after pickup confirm (instant donation prompt)
+- ✅ ZIP code email alerts — subscribe to a ZIP, get notified when items appear
+- ✅ Browser web push (VAPID-signed, service worker, opt-in from dashboard)
+- ✅ Open Graph + Twitter Card meta tags
+- ✅ Tests: 74/74 backend passing (34+22+18); frontend 100%
 
-## P0 (post-launch)
-- Wire real Resend API for actual email sending (currently MOCKED)
-- Real Persona / Stripe Identity for ID document upload
-- Custom domain + production CORS lockdown
+## P0 / next
+- Real Stripe LIVE key (currently test) — user needs to swap when ready to receive real money
+- Verify a sending domain in Resend so emails reach everyone (currently only the account owner gets delivery)
+- Stripe Identity must be enabled on the live account (auto when KYC done)
+- Custom domain + lock CORS to it (still allow_origins=*)
 
 ## P1
-- Push notifications when a new item appears in your ZIP
-- Admin search/filter on users + reports
-- Bulk admin actions
-- Email enumeration timing fix on forgot-password
-- Split server.py into routers (auth/items/admin/payments/chat/donations)
+- ZIP radius search (haversine on geocoded lat/lon) + optional map view
+- Perceptual photo hashing (pHash) for stronger dedup
+- Split server.py (1135 lines) into routers
+- Persist EMAIL_LOG to MongoDB for real audit trail
+- Admin search/filter + bulk actions
+- SMS fallback for users who don't enable browser push
 
 ## P2
 - Mobile native app (React Native)
