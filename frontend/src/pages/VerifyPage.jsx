@@ -16,10 +16,10 @@ export default function VerifyPage() {
   const startCheckout = async () => {
     setLoading(true);
     try {
-      const { data } = await api.post("/payments/identity-checkout", { origin_url: window.location.origin });
+      const { data } = await api.post("/payments/verify-checkout", { origin_url: window.location.origin });
       window.location.href = data.url;
     } catch (e) {
-      toast.error(e.response?.data?.detail || "Could not start verification");
+      toast.error(e.response?.data?.detail || "Could not start checkout");
       setLoading(false);
     }
   };
@@ -48,10 +48,10 @@ export default function VerifyPage() {
       <Navbar />
       <main className="flex-1 max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-12 w-full">
         <div className="text-xs uppercase tracking-[0.2em] font-semibold text-em-textSoft mb-2">Safety first</div>
-        <h1 className="font-heading text-4xl font-bold tracking-tight mb-3">Verify your ID</h1>
+        <h1 className="font-heading text-4xl font-bold tracking-tight mb-3">Verify your ID — $2 one-time</h1>
         <p className="text-em-textSoft mb-8">
-          Upload your driver's license or state ID via Stripe Identity. ExpireMate never sees the document —
-          Stripe verifies it and we just see "verified ✓". Verified posters and claimers get a blue checkmark.
+          A $2 verification fee acts as a community safety gate — keeps bad actors out and goes 100% to the founder's college fund.
+          Once Stripe Identity is enabled on this account, we'll switch to full document upload automatically.
         </p>
 
         <div className="em-card p-6 mb-6">
@@ -60,8 +60,8 @@ export default function VerifyPage() {
             {[
               "Blue verified checkmark on your profile",
               "Ability to post items and claim items",
-              "Stripe Identity selfie + ID document verification",
-              "Trust from neighbors at pickup",
+              "Trust from your neighbors at pickup",
+              "Direct support to a high school student's tuition",
             ].map((t) => (
               <li key={t} className="flex items-start gap-2">
                 <Check className="w-4 h-4 text-em-secondary mt-0.5 shrink-0" />
@@ -77,10 +77,10 @@ export default function VerifyPage() {
           onClick={startCheckout}
           className="w-full rounded-full bg-em-primary hover:bg-em-primaryHover h-12 font-semibold text-base"
         >
-          {loading ? "Loading…" : "Verify ID via Stripe Identity"}
+          {loading ? "Loading checkout…" : "Verify ID — $2 via Stripe"}
         </Button>
         <p className="text-xs text-em-textSoft mt-3 text-center">
-          Secure verification via Stripe Identity. You'll be redirected.
+          Secure payment via Stripe. You'll be redirected.
         </p>
       </main>
       <Footer />
