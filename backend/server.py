@@ -52,6 +52,7 @@ CATEGORIES = ["Food", "Sealed Medicine", "Pet", "Cleaning", "Other"]
 DONATION_PRESETS = {"three": 3.00, "five": 5.00, "ten": 10.00}
 DONATION_GOAL = 20000.00
 VERIFICATION_FEE = 2.00
+CURRENCY = "cad"
 
 
 class RegisterIn(BaseModel):
@@ -374,14 +375,14 @@ async def create_verify_checkout(body: VerifyCheckoutIn, request: Request):
     success_url = f"{origin}/payment-success?session_id={{CHECKOUT_SESSION_ID}}&type=verify"
     cancel_url = f"{origin}/verify"
     req = CheckoutSessionRequest(
-        amount=VERIFICATION_FEE, currency="usd",
+        amount=VERIFICATION_FEE, currency=CURRENCY,
         success_url=success_url, cancel_url=cancel_url,
         metadata={"user_id": str(user["_id"]), "purpose": "id_verification"},
     )
     session = await stripe.create_checkout_session(req)
     await db.payment_transactions.insert_one({
         "session_id": session.session_id, "user_id": user["_id"],
-        "purpose": "id_verification", "amount": VERIFICATION_FEE, "currency": "usd",
+        "purpose": "id_verification", "amount": VERIFICATION_FEE, "currency": CURRENCY,
         "payment_status": "initiated",
         "metadata": {"user_id": str(user["_id"]), "purpose": "id_verification"},
         "created_at": now_iso(),
@@ -418,14 +419,14 @@ async def create_donate_checkout(body: DonationCheckoutIn, request: Request):
         meta["user_id"] = str(user["_id"])
         meta["donor_name"] = user.get("name", "")
     req = CheckoutSessionRequest(
-        amount=float(amount), currency="usd",
+        amount=float(amount), currency=CURRENCY,
         success_url=success_url, cancel_url=cancel_url, metadata=meta,
     )
     session = await stripe.create_checkout_session(req)
     await db.payment_transactions.insert_one({
         "session_id": session.session_id,
         "user_id": user["_id"] if user else None,
-        "purpose": "donation", "amount": amount, "currency": "usd",
+        "purpose": "donation", "amount": amount, "currency": CURRENCY,
         "payment_status": "initiated", "metadata": meta,
         "anonymous": body.anonymous, "created_at": now_iso(),
     })
