@@ -1,0 +1,88 @@
+{
+  "theme": "light",
+  "archetype": "Organic & Earthy",
+  "mood": "Urgent, Trustworthy, Community-Warm, Grassroots",
+  "colors": {
+    "background": "#FAF9F6",
+    "surface": "#FFFFFF",
+    "primary": "#E05A47",
+    "primary_hover": "#C84B3A",
+    "secondary": "#2E5E4E",
+    "secondary_hover": "#244A3D",
+    "accent_yellow": "#FBBF24",
+    "text_primary": "#1C1917",
+    "text_secondary": "#57534E",
+    "border": "#E5E0D8",
+    "error": "#DC2626",
+    "success": "#16A34A"
+  },
+  "typography": {
+    "heading_font": "Outfit",
+    "body_font": "DM Sans",
+    "scales": {
+      "h1": "text-5xl sm:text-6xl tracking-tight leading-none font-bold",
+      "h2": "text-3xl sm:text-4xl tracking-tight leading-tight font-semibold",
+      "h3": "text-xl sm:text-2xl tracking-tight font-medium",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm tracking-wide",
+      "overline": "text-xs uppercase tracking-[0.2em] font-semibold"
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous spacing. Use p-6, p-8, and p-12 for breathing room.",
+    "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+    "grid_pattern": "Bento Grid Protocol. Asymmetrical layouts for marketing pages, dense clear grids for the browse items.",
+    "border_radius": "rounded-2xl for main cards, rounded-full for buttons (pill shape for approachability)."
+  },
+  "surfaces_and_shadows": {
+    "cards": "Flat solid surfaces with 1px border (#E5E0D8), NO muddy shadows. On hover: shadow-md and -translate-y-1.",
+    "glassmorphism": "Used only for sticky header: backdrop-blur-xl bg-[#FAF9F6]/80 border-b border-[#E5E0D8].",
+    "buttons": "Tactile. Primary uses Terracotta (#E05A47) with white text. Secondary uses Forest Green (#2E5E4E). Never use transparent buttons without borders."
+  },
+  "components": {
+    "navigation": "Sticky top nav. Logo left, links center, CTA right. Mobile uses hamburger. Glassmorphism effect.",
+    "hero": "Grassroots campaign style. Large asymmetric typography, prominent donation thermometer component next to the hero image.",
+    "donation_thermometer": "Chunky, high contrast. Forest green progress bar, clear monetary milestones. Embed directly in the hero or its own full-width banner.",
+    "item_cards": "Image top (max-h-48, object-cover). Bold typography for expiration date (use Terracotta text if < 2 days). Category pill. Zip code pill. 'Claim' button.",
+    "forms": "Shadcn UI forms, heavily customized. border-stone-300, warm background. Clear labels.",
+    "modals": "Used for the 4-digit claim code. backdrop-blur-sm on the overlay.",
+    "testing": "All interactive elements MUST include data-testid (e.g., data-testid='claim-item-button')."
+  },
+  "animations": {
+    "hover": "Smooth transform translate-y-1 on cards. Button hover darkens color.",
+    "transitions": "transition-all duration-200 ease-in-out",
+    "loading": "Use simple pulsing elements or a custom spinner using lucide-react."
+  },
+  "assets": {
+    "icons": "lucide-react",
+    "images": [
+      {
+        "category": "Hero Background / Community Sharing",
+        "url": "https://images.unsplash.com/photo-1721180672597-beddd124205a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzOTB8MHwxfHNlYXJjaHwxfHxjb21tdW5pdHklMjBzaGFyaW5nJTIwZm9vZHxlbnwwfHx8fDE3ODEyMjcxMTl8MA&ixlib=rb-4.1.0&q=85",
+        "description": "A group of people sitting around a table with plates of food, 'Welcome friends' written. Perfect for community warmth."
+      },
+      {
+        "category": "Founder Story / College Fund",
+        "url": "https://images.pexels.com/photos/771317/pexels-photo-771317.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "A young man concentrates on studying at his desk. Use in the 'About the Founder' or donation section."
+      },
+      {
+        "category": "Browse Items / Fresh Produce Placeholder",
+        "url": "https://images.unsplash.com/photo-1775175305137-00aa2d330d47?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwyfHxmcmVzaCUyMGdyb2NlcmllcyUyMG5hdHVyYWwlMjBsaWdodHxlbnwwfHx8fDE3ODEyMjcxMTh8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Elderly woman selecting produce at a market. Great context for food items."
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the color palette. Background should be #FAF9F6, not pure white.",
+    "Install and use 'Outfit' font for headings and 'DM Sans' for body from Google Fonts.",
+    "Build the UI in React (.js files) with Tailwind CSS.",
+    "Use Shadcn UI for forms, dialogs, dropdowns, but customize the styling to match the organic/tactile vibe (no default SaaS look).",
+    "Every button, link, form input, and key element must have a data-testid attribute in kebab-case.",
+    "Implement the donation thermometer as a prominent, visual progress bar.",
+    "Use lucide-react for icons. Size them appropriately.",
+    "For the item grid, use the Bento grid protocol. Do not make equal generic squares.",
+    "Ensure 'Expires in...' text has high contrast and visual urgency (e.g., using the primary Terracotta color).",
+    "The 4-digit claim code must be a clear, distinct modal with large input fields."
+  ]
+}
