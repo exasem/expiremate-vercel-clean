@@ -28,7 +28,11 @@ from helpers import (
     admin_email, admin_password, is_admin, make_token, now_utc,
     send_dev_email, build_receipt_pdf, EMAIL_LOG,
 )
+from email_sender import send_email, render_zip_alert, render_action_email
+from push_utils import vapid_public_hex, send_push
 import asyncio
+import hashlib
+import stripe as stripe_sdk
 
 from emergentintegrations.payments.stripe.checkout import (
     StripeCheckout, CheckoutSessionRequest,
@@ -241,6 +245,12 @@ async def create_item(
     photo_bytes = await photo.read()
     if len(photo_bytes) > 5 * 1024 * 1024:
         raise HTTPException(400, "Photo too large (max 5MB)")
+
+    # Dedup by content hash — prevent stock-photo / repost scams
+    photo_hash = hashlib.sha256(photo_bytes).hexdigest()
+    if await db.items.find_one({"photo_hash": photo_hash}):
+        raise HTTPException(400, "This exact photo has already been posted. Please upload a fresh photo of the actual item.")
+
     ext = (photo.filename.split(".")[-1] if photo.filename and "." in photo.filename else "jpg").lower()
     path = f"{APP_NAME}/items/{str(user['_id'])}/{uuid.uuid4()}.{ext}"
     try:
@@ -256,6 +266,7 @@ async def create_item(
         "zip_code": zip_code,
         "meetup_suggestion": meetup_suggestion or "Suggested: public grocery store parking lot",
         "image_path": image_path, "status": "active",
+        "photo_hash": photo_hash,
         "owner_id": user["_id"], "owner_name": user.get("name", ""),
         "claimed_by": None, "claim_code": None,
         "claimed_at": None, "completed_at": None,
@@ -263,6 +274,8 @@ async def create_item(
     }
     res = await db.items.insert_one(doc)
     doc["_id"] = res.inserted_id
+    # Fire-and-forget: notify subscribers
+    asyncio.create_task(_notify_zip_subscribers(doc))
     return {"item": item_to_public(doc, str(user["_id"]))}
 
 
@@ -737,6 +750,240 @@ async def admin_emails(request: Request):
 
 # ---------- Auto-expire background loop ----------
 _auto_expire_task = None
+
+stripe_sdk.api_key = os.environ.get("STRIPE_API_KEY", "")
+
+
+async def _notify_zip_subscribers(item: dict):
+    """Email + web-push everyone subscribed to this item's ZIP code."""
+    zip_code = item.get("zip_code")
+    if not zip_code:
+        return
+    frontend = os.environ.get("FRONTEND_URL", "").rstrip("/") or "https://expiremate.com"
+    item_url = f"{frontend}/items/{item['_id']}"
+    days = 0
+    try:
+        from datetime import date
+        days = (date.fromisoformat(item.get("expiration_date", "")) - date.today()).days
+    except Exception:
+        days = 0
+    title = item.get("title", "New item")
+    category = item.get("category", "")
+
+    async for sub in db.zip_subscriptions.find({"zip_code": zip_code}):
+        # Skip the poster themselves
+        if sub.get("user_id") and item.get("owner_id") and str(sub["user_id"]) == str(item["owner_id"]):
+            continue
+        user = await db.users.find_one({"_id": sub["user_id"]})
+        if not user or user.get("banned"):
+            continue
+        try:
+            html = render_zip_alert(item_title=title, item_url=item_url,
+                                    category=category, days_left=days, zip_code=zip_code)
+            send_email(to=user["email"], subject=f"New {category} in {zip_code} — expires soon",
+                       html=html, link=item_url)
+        except Exception as e:
+            logger.warning(f"zip email failed: {e}")
+
+    # Web push
+    async for push_sub in db.push_subscriptions.find({"zip_codes": zip_code}):
+        try:
+            send_push(push_sub["subscription"], {
+                "title": f"New item in {zip_code}",
+                "body": f"{title} ({category}) — expires {'in ' + str(days) + 'd' if days > 0 else 'today'}",
+                "url": f"/items/{item['_id']}",
+            })
+        except Exception as e:
+            logger.warning(f"push send failed: {e}")
+
+
+# ---------- Impact + streaks + donor-of-month ----------
+@api.get("/stats/impact")
+async def stats_impact():
+    total_rescued = await db.items.count_documents({"status": "completed"})
+    today_iso = now_utc().date().isoformat()
+    week_ago = (now_utc() - timedelta(days=7)).date().isoformat()
+    weekly = await db.items.count_documents({"status": "completed", "completed_at": {"$gte": week_ago}})
+    # Rough estimate: 1.2 lbs per rescued item
+    pounds = round(total_rescued * 1.2, 1)
+    return {"items_rescued_total": total_rescued, "items_rescued_week": weekly,
+            "pounds_saved": pounds, "today": today_iso}
+
+
+@api.get("/stats/donor-of-month")
+async def stats_donor_of_month():
+    month_start = now_utc().replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    pipeline = [
+        {"$match": {"purpose": "donation", "payment_status": "paid",
+                    "created_at": {"$gte": month_start},
+                    "anonymous": {"$ne": True}}},
+        {"$group": {"_id": "$metadata.donor_name", "total": {"$sum": "$amount"}}},
+        {"$sort": {"total": -1}}, {"$limit": 1},
+    ]
+    async for r in db.payment_transactions.aggregate(pipeline):
+        return {"name": r["_id"] or "Anonymous", "total": round(float(r["total"]), 2)}
+    return {"name": None, "total": 0}
+
+
+@api.get("/me/stats")
+async def my_stats(request: Request):
+    user = await auth_user(request)
+    rescued_posted = await db.items.count_documents({"owner_id": user["_id"], "status": "completed"})
+    rescued_claimed = await db.items.count_documents({"claimed_by": user["_id"], "status": "completed"})
+    donations_count = await db.payment_transactions.count_documents({
+        "user_id": user["_id"], "purpose": "donation", "payment_status": "paid"})
+
+    badges = []
+    total_rescued = rescued_posted + rescued_claimed
+    if total_rescued >= 1: badges.append({"key": "first_rescue", "label": "First Rescue", "emoji": "🌱"})
+    if total_rescued >= 5: badges.append({"key": "five", "label": "5 Items Saved", "emoji": "🌟"})
+    if total_rescued >= 25: badges.append({"key": "twentyfive", "label": "25 Saved", "emoji": "🏆"})
+    if donations_count >= 1: badges.append({"key": "donor", "label": "Donor", "emoji": "💛"})
+    if user.get("verified"): badges.append({"key": "verified", "label": "Verified", "emoji": "✓"})
+    return {
+        "rescued_posted": rescued_posted, "rescued_claimed": rescued_claimed,
+        "total_rescued": total_rescued, "donations_count": donations_count,
+        "badges": badges,
+    }
+
+
+# ---------- Item bump ----------
+@api.post("/items/{item_id}/bump")
+async def bump_item(item_id: str, request: Request):
+    user = await auth_user(request)
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    item = await db.items.find_one({"_id": oid})
+    if not item:
+        raise HTTPException(404, "Not found")
+    if str(item["owner_id"]) != str(user["_id"]):
+        raise HTTPException(403, "Only the owner can bump")
+    if item.get("status") != "active":
+        raise HTTPException(400, "Only active items can be bumped")
+    last_bump = item.get("bumped_at") or item.get("created_at")
+    if last_bump and (now_utc() - datetime.fromisoformat(last_bump.replace("Z", "+00:00"))).total_seconds() < 24 * 3600:
+        raise HTTPException(429, "Already bumped in the last 24h")
+    await db.items.update_one(
+        {"_id": oid},
+        {"$set": {"created_at": now_iso(), "bumped_at": now_iso()}},
+    )
+    return {"ok": True}
+
+
+# ---------- ZIP subscriptions (email + push opt-in) ----------
+class ZipSubIn(BaseModel):
+    zip_code: str = Field(min_length=3, max_length=10)
+
+
+@api.post("/subscriptions/zip")
+async def subscribe_zip(body: ZipSubIn, request: Request):
+    user = await auth_user(request)
+    await db.zip_subscriptions.update_one(
+        {"user_id": user["_id"], "zip_code": body.zip_code},
+        {"$setOnInsert": {"user_id": user["_id"], "zip_code": body.zip_code,
+                          "created_at": now_iso()}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api.delete("/subscriptions/zip/{zip_code}")
+async def unsubscribe_zip(zip_code: str, request: Request):
+    user = await auth_user(request)
+    await db.zip_subscriptions.delete_one({"user_id": user["_id"], "zip_code": zip_code})
+    return {"ok": True}
+
+
+@api.get("/me/subscriptions")
+async def my_subscriptions(request: Request):
+    user = await auth_user(request)
+    rows = await db.zip_subscriptions.find({"user_id": user["_id"]}).to_list(50)
+    return {"zips": [r["zip_code"] for r in rows]}
+
+
+# ---------- Web push ----------
+@api.get("/push/vapid-public-key")
+async def push_vapid_key():
+    return {"public_key_hex": vapid_public_hex()}
+
+
+class PushSubIn(BaseModel):
+    subscription: dict
+    zip_codes: list[str] = []
+
+
+@api.post("/push/subscribe")
+async def push_subscribe(body: PushSubIn, request: Request):
+    user = await auth_user(request)
+    await db.push_subscriptions.update_one(
+        {"user_id": user["_id"], "subscription.endpoint": body.subscription.get("endpoint")},
+        {"$set": {
+            "user_id": user["_id"],
+            "subscription": body.subscription,
+            "zip_codes": body.zip_codes or ([user.get("zip_code")] if user.get("zip_code") else []),
+            "updated_at": now_iso(),
+        }},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+# ---------- Stripe Identity ----------
+class IdentityCheckoutIn(BaseModel):
+    origin_url: str
+
+
+@api.post("/payments/identity-checkout")
+async def create_identity_checkout(body: IdentityCheckoutIn, request: Request):
+    user = await auth_user(request)
+    if user.get("verified"):
+        raise HTTPException(400, "Already verified")
+    if not stripe_sdk.api_key:
+        raise HTTPException(500, "Stripe not configured")
+    origin = body.origin_url.rstrip("/")
+    return_url = f"{origin}/identity-return?session_id={{SESSION_ID}}"
+    try:
+        session = stripe_sdk.identity.VerificationSession.create(
+            type="document",
+            metadata={"user_id": str(user["_id"])},
+            return_url=return_url,
+            options={"document": {"require_id_number": False,
+                                  "require_live_capture": True,
+                                  "require_matching_selfie": True}},
+        )
+    except Exception as e:
+        logger.error(f"identity create failed: {e}")
+        raise HTTPException(502, f"Stripe Identity error: {e}")
+    await db.identity_sessions.insert_one({
+        "session_id": session["id"], "user_id": user["_id"],
+        "status": session["status"], "created_at": now_iso(),
+    })
+    return {"url": session["url"], "session_id": session["id"], "status": session["status"]}
+
+
+@api.get("/payments/identity-status/{session_id}")
+async def identity_status(session_id: str, request: Request):
+    user = await auth_user(request)
+    try:
+        session = stripe_sdk.identity.VerificationSession.retrieve(session_id)
+    except Exception as e:
+        raise HTTPException(404, f"Session not found: {e}")
+    meta = session.get("metadata") or {}
+    if meta.get("user_id") != str(user["_id"]) and not is_admin(user):
+        raise HTTPException(403, "Not your session")
+    status_value = session.get("status", "unknown")
+    await db.identity_sessions.update_one(
+        {"session_id": session_id}, {"$set": {"status": status_value, "updated_at": now_iso()}}
+    )
+    if status_value == "verified" and not user.get("verified"):
+        await db.users.update_one({"_id": user["_id"]},
+                                   {"$set": {"verified": True, "verified_at": now_iso()}})
+    return {"status": status_value, "last_error": session.get("last_error")}
+
+
+
 
 
 async def _auto_expire_loop():

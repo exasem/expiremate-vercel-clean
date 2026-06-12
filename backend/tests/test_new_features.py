@@ -163,7 +163,8 @@ def test_11_send_and_verify_email():
 # ---------- Chat ----------
 def test_12_create_item_for_chat():
     import io
-    files = {"photo": ("a.jpg", io.BytesIO(b"\xff\xd8\xff\xd9"*200), "image/jpeg")}
+    unique = b"\xff\xd8\xff\xd9" + os.urandom(512) + f"_chat_{TS}".encode()
+    files = {"photo": ("a.jpg", io.BytesIO(unique), "image/jpeg")}
     data = {"title": "Chat Bread", "description": "fresh sliced loaf",
             "category": "Food", "expiration_date": "2026-12-01",
             "quantity": "1", "zip_code": "10001"}

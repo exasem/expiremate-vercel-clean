@@ -87,7 +87,8 @@ def test_12_mod_blocks_oxycodone():
     assert r.status_code == 400, f"Should be blocked: {r.status_code} {r.text}"
 
 def test_13_mod_allows_tylenol_and_creates():
-    files = {"photo": ("a.jpg", io.BytesIO(b"\xff\xd8\xff\xd9"*200), "image/jpeg")}
+    import os as _os
+    files = {"photo": ("a.jpg", io.BytesIO(b"\xff\xd8\xff\xd9" + _os.urandom(512) + f"_tyl_{TS}".encode()), "image/jpeg")}
     data = {"title": "Sealed Tylenol bottle", "description": "unopened factory sealed",
             "category": "Sealed Medicine", "expiration_date": "2026-12-01",
             "quantity": "1", "zip_code": "10001", "meetup_suggestion": "Park"}

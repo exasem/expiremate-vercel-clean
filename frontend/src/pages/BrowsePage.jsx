@@ -3,6 +3,7 @@ import api from "@/lib/api";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import ItemCard from "@/components/ItemCard";
+import ZipAlertButton from "@/components/ZipAlertButton";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -64,6 +65,7 @@ export default function BrowsePage() {
           >
             Search
           </Button>
+          <ZipAlertButton zipCode={zip} />
         </div>
 
         {loading ? (

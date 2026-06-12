@@ -5,6 +5,8 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import ItemCard from "@/components/ItemCard";
 import DonationThermometer from "@/components/DonationThermometer";
+import ImpactCounter from "@/components/ImpactCounter";
+import DonorOfMonth from "@/components/DonorOfMonth";
 import { Button } from "@/components/ui/button";
 import { Camera, ShieldCheck, HandHeart, Clock, Sparkles, ArrowRight } from "lucide-react";
 
@@ -75,7 +77,13 @@ export default function HomePage() {
             </div>
           </div>
           <DonationThermometer />
+          <DonorOfMonth />
         </div>
+      </section>
+
+      {/* Impact counter strip */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6">
+        <ImpactCounter />
       </section>
 
       {/* How it works */}

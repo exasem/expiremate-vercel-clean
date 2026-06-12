@@ -13,6 +13,8 @@ import {
 import { Clock, MapPin, Tag, ShieldCheck, AlertTriangle, Flag } from "lucide-react";
 import { toast } from "sonner";
 import ItemChat from "@/components/ItemChat";
+import ShareButtons from "@/components/ShareButtons";
+import TipJar from "@/components/TipJar";
 
 export default function ItemDetailPage() {
   const { id } = useParams();
@@ -22,6 +24,7 @@ export default function ItemDetailPage() {
   const [claimCode, setClaimCode] = useState(null);
   const [confirmCode, setConfirmCode] = useState("");
   const [reportReason, setReportReason] = useState("");
+  const [showTipJar, setShowTipJar] = useState(false);
 
   const refresh = async () => {
     try {
@@ -46,9 +49,10 @@ export default function ItemDetailPage() {
   const confirmPickup = async () => {
     try {
       await api.post(`/items/${id}/confirm`, { code: confirmCode.trim() });
-      toast.success("Pickup confirmed — donate to celebrate?");
+      toast.success("Pickup confirmed!");
       setConfirmCode("");
-      nav("/donate");
+      setShowTipJar(true);
+      refresh();
     } catch (e) { toast.error(e.response?.data?.detail || "Bad code"); }
   };
 
@@ -171,10 +175,14 @@ export default function ItemDetailPage() {
               </DialogContent>
             </Dialog>
 
+            <ShareButtons title={item.title} itemId={item.id} />
+
             <div className="mt-6 em-card p-4 bg-em-yellow/10 border-em-yellow/40 flex gap-3 text-sm">
               <AlertTriangle className="w-5 h-5 text-em-yellow shrink-0 mt-0.5" />
               <span>Always meet in public. Items are given "as is" — ExpireMate does not inspect or guarantee safety.</span>
             </div>
+
+            {showTipJar && <TipJar onDismiss={() => setShowTipJar(false)} />}
           </div>
         </div>
 

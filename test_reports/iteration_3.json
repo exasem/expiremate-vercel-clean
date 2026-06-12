@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration-3 testing for ExpireMate (12 features + Resend + push + Stripe Identity + photo dedup). Backend: 74/74 pytest tests pass — 34 original + 22 iter-2 + 18 new iter-3. Verified: /stats/impact returns 3 non-negative numbers, /stats/donor-of-month returns {name,total} (null name initially), /me/stats includes verified badge for verified user and 'first_rescue' badge after a completed item, /items/{id}/bump enforces owner+active+24h cooldown (429), /subscriptions/zip POST+DELETE+GET roundtrip works, /push/vapid-public-key returns hex string, /push/subscribe persists subscription JSON with ZIP list, /payments/identity-checkout exists and is auth-gated (returns 502 on Stripe Identity-not-enabled, 400 for already-verified users), /payments/identity-status returns 403/404 on mismatch, photo SHA256 dedup blocks second post with 'already been posted', _notify_zip_subscribers fires on item post and the subscriber receives a Resend email (provider='resend' in EMAIL_LOG; delivered=False with '403 validation_error' for unverified-domain recipients, as expected), /auth/forgot-password produces an EMAIL_LOG entry with provider='resend' and still returns dev_link. Frontend: homepage shows [data-testid='impact-counter'] with 3 numbers; [data-testid='donor-of-month'] hidden initially (no non-anon donations this month) — correct; index.html has og:title with 'ExpireMate' and og:image set; /verify renders 'Verify ID via Stripe Identity' button with no '$2' wording for unverified users; /identity-return redirects unauthenticated to /login (correct) and renders for logged-in users; Dashboard shows [data-testid='streak-badges'] and [data-testid='browser-push-button']; Browse exposes [data-testid='zip-alert-button'] once ZIP entered and user is logged in; ItemDetail share buttons exist in source (share-twitter, share-sms, share-copy) — runtime test skipped because no active items remained in DB after tests, but DOM markup confirmed via grep. Two pre-existing tests had to be patched: test_new_features.test_12 and backend_test.test_13 used fixed photo bytes that now collide with the new photo-hash dedup — switched to per-run random bytes (test-only fix, no production code changed).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter3_features.py",
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter3_results.xml",
+    "/app/test_reports/pytest/iter3_full_regression.xml"
+  ],
+  "action_items": [
+    "[Optional] server.py is now 1135 lines — split into routers (auth, items, admin, payments, chat, donations, push, stats, subscriptions). Same finding as iter-2.",
+    "[Optional] _auto_expire_loop task is created but never cancelled on shutdown — pre-existing iter-2 finding.",
+    "[Optional] Photo dedup is global (DB-wide), not per-user. A different user cannot post a re-encoded copy with the same bytes — fine for v1, but document. Also: a stock-photo dedup miss is possible if the attacker re-encodes (different bytes → different SHA-256). Consider perceptual hashing (pHash) for stronger dedup later.",
+    "[Optional] /payments/identity-checkout uses stripe_sdk.identity.VerificationSession.create with require_live_capture=True + require_matching_selfie=True; this requires Stripe Identity to be enabled on the platform account, which is not the case for sk_test_emergent. Endpoint correctly returns 502 with the Stripe error message — acceptable per the test brief.",
+    "[Optional] _notify_zip_subscribers loops over subscribers sequentially with sync send_email (HTTP POST to Resend) inside an asyncio.create_task — for many subscribers this will block the event loop one Resend call at a time (~150-500ms each). Wrap with asyncio.to_thread or use httpx.AsyncClient when subscriber list grows.",
+    "[Optional] EMAIL_LOG is in-memory (max 200 entries) — restarts wipe outbox. For real auditing, persist to MongoDB.",
+    "[Optional] Pre-existing tests test_new_features.test_12 and backend_test.test_13 used static photo bytes that collided with the new photo-hash dedup. I patched them to use per-run random bytes; main agent should verify the same anti-pattern isn't repeated in future tests (any new test that POSTs an item must use unique bytes)."
+  ],
+  "critical_code_review_comments": [
+    "server.py 1135 lines — exceeds 700-line guideline; split into routers.",
+    "send_email in email_sender.py is synchronous (requests.post) but is called from an asyncio task in _notify_zip_subscribers — blocks event loop per subscriber.",
+    "_notify_zip_subscribers swallows all exceptions with a warning — if Resend goes down, you'll never know in a metric. Consider counting fail/success.",
+    "/payments/identity-status uses stripe_sdk.identity.VerificationSession.retrieve in a synchronous fashion; with many calls it will block. Acceptable for low traffic.",
+    "VAPID_PRIVATE_PEM is stored in .env as a string with literal \\n — push_utils.py correctly replaces \\\\n with newline. Good.",
+    "Photo hash dedup index missing — db.items.find_one({photo_hash}) will be slow at scale; add unique sparse index on photo_hash.",
+    "Resend errors are logged but the EMAIL_LOG entry still has provider='resend' — good for observability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter3_features.py (new)",
+    "/app/backend/tests/test_new_features.py (test_12 photo bytes made unique per run)",
+    "/app/backend/tests/backend_test.py (test_13 photo bytes made unique per run)"
+  ],
+  "success_rate": {"backend": "100% (74/74 — 34 original + 22 iter-2 + 18 new iter-3)", "frontend": "100% (all required data-testid present and pages render correctly; share-* testids confirmed in source even though no live item in DB at test time)"},
+  "test_credentials": "Admin: admin@expiremate.com / ExpireMate2026!  | Per-run test users: iter3poster_<ts>@expiremate.com, iter3sub_<ts>@expiremate.com (Test1234, auto-verified via Mongo flip).",
+  "seed_data_creation": "Tests create per-run posters/subscribers and a few items (with unique photo bytes). Most items are removed by the cleanup step or via dedup-test cycle. No persistent seed data introduced.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Three regression suites now: /app/backend/tests/backend_test.py (34), /app/backend/tests/test_new_features.py (22), /app/backend/tests/test_iter3_features.py (18). Run all three: `pytest /app/backend/tests/ -v`. IMPORTANT: any test that POSTs to /api/items MUST use unique photo bytes per run (e.g., b'\\xff\\xd8\\xff\\xd9' + os.urandom(512) + str(TS).encode()), otherwise the photo-hash dedup will reject the second post. test_iter3_features.test_13 and test_14 tolerate 502/404 from Stripe Identity because the platform sk_test_emergent does not have Identity enabled — that is expected and explicitly allowed by the review brief. Resend EMAIL_LOG entries to non-verified-domain recipients (anything other than asem.email2019@gmail.com) will have delivered=False and error containing '403' + 'validation_error' — that is expected and tests assert exactly that.",
+  "rca of the issue": "No production code bugs found in iteration-3. Only test-side issue: pre-existing iter-2/iter-1 tests reused identical hard-coded photo bytes across runs which now collide with the new photo-hash dedup feature. Mitigation: patched both files to use os.urandom(512) + TS-suffixed bytes per test run. All 74 tests now pass."
+}

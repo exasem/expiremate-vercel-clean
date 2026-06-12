@@ -21,6 +21,7 @@ import AdminPage from "@/pages/AdminPage";
 import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import VerifyEmailPage from "@/pages/VerifyEmailPage";
+import IdentityReturnPage from "@/pages/IdentityReturnPage";
 
 function App() {
   return (
@@ -41,6 +42,7 @@ function App() {
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/verify-email" element={<VerifyEmailPage />} />
+            <Route path="/identity-return" element={<ProtectedRoute><IdentityReturnPage /></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
             <Route path="/post" element={<ProtectedRoute><PostItemPage /></ProtectedRoute>} />
             <Route path="/verify" element={<ProtectedRoute><VerifyPage /></ProtectedRoute>} />

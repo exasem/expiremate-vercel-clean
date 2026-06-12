@@ -1,18 +1,14 @@
-"""Helpers — admin role checks, email token utils, PDF receipts, in-memory mailbox."""
+"""Admin helpers + PDF receipt builder + thin shim over email_sender."""
 import os
-import logging
 import secrets
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from io import BytesIO
 
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
 
-logger = logging.getLogger(__name__)
-
-# Local mailbox keeps the latest dev emails so the UI can show admin a "what we sent" view.
-EMAIL_LOG: list[dict] = []
+from email_sender import EMAIL_LOG, send_email, render_action_email  # re-export
 
 
 def admin_email() -> str:
@@ -36,18 +32,14 @@ def now_utc():
 
 
 def send_dev_email(to: str, subject: str, body: str, link: str | None = None) -> dict:
-    """Mock email — log the message and stash it in memory for the admin UI."""
-    entry = {
-        "to": to,
-        "subject": subject,
-        "body": body,
-        "link": link,
-        "sent_at": now_utc().isoformat(),
-    }
-    EMAIL_LOG.insert(0, entry)
-    del EMAIL_LOG[200:]  # keep last 200
-    logger.info(f"[DEV EMAIL] -> {to}  subj={subject}  link={link}")
-    return entry
+    """Used by auth/email-verify/password-reset flows. Sends real email via Resend if keyed."""
+    html = render_action_email(
+        heading=subject,
+        body=body,
+        cta_text="Open ExpireMate",
+        cta_url=link or os.environ.get("FRONTEND_URL", "https://expiremate.com"),
+    )
+    return send_email(to=to, subject=subject, html=html, link=link)
 
 
 def build_receipt_pdf(*, donor_name: str, donor_email: str, amount: float,
@@ -56,7 +48,7 @@ def build_receipt_pdf(*, donor_name: str, donor_email: str, amount: float,
     c = canvas.Canvas(buf, pagesize=letter)
     w, h = letter
 
-    c.setFillColorRGB(0.18, 0.37, 0.30)  # forest green
+    c.setFillColorRGB(0.18, 0.37, 0.30)
     c.rect(0, h - 1.2 * inch, w, 1.2 * inch, fill=1, stroke=0)
     c.setFillColorRGB(1, 1, 1)
     c.setFont("Helvetica-Bold", 22)

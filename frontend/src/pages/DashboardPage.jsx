@@ -5,6 +5,8 @@ import { useAuth } from "@/context/AuthContext";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import ItemCard from "@/components/ItemCard";
+import StreakBadges from "@/components/StreakBadges";
+import BrowserPushOptIn from "@/components/BrowserPushOptIn";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ShieldCheck, ShieldOff, Plus, Download, Mail } from "lucide-react";
@@ -32,10 +34,16 @@ export default function DashboardPage() {
     finally { setSendingVerify(false); }
   };
 
+  const bumpItem = async (id) => {
+    try {
+      await api.post(`/items/${id}/bump`);
+      toast.success("Bumped to the top!");
+    } catch (e) { toast.error(e.response?.data?.detail || "Could not bump"); }
+  };
+
   const downloadReceipt = (sid) => {
     const token = localStorage.getItem("em_token");
     const url = `${API}/donations/${sid}/receipt${token ? `?_=${Date.now()}` : ""}`;
-    // Use fetch with bearer to get the PDF blob, then trigger download
     fetch(url, { credentials: "include", headers: token ? { Authorization: `Bearer ${token}` } : {} })
       .then((res) => res.ok ? res.blob() : Promise.reject(res))
       .then((blob) => {
@@ -64,6 +72,7 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="flex gap-3 flex-wrap">
+            <BrowserPushOptIn zipCode={user?.zip_code} />
             {!user?.email_verified && (
               <Button data-testid="dashboard-send-email-verify"
                 onClick={sendEmailVerify} disabled={sendingVerify}
@@ -88,6 +97,7 @@ export default function DashboardPage() {
         </div>
 
         <Tabs defaultValue="posts">
+          <StreakBadges />
           <TabsList className="bg-em-bg border border-em-border rounded-full p-1">
             <TabsTrigger value="posts" data-testid="dashboard-tab-posts" className="rounded-full data-[state=active]:bg-em-primary data-[state=active]:text-white">
               My posts ({data.posts.length})
@@ -105,7 +115,19 @@ export default function DashboardPage() {
               <div className="em-card p-12 text-center text-em-textSoft">No posts yet.</div>
             ) : (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {data.posts.map((i) => <ItemCard key={i.id} item={i} />)}
+                {data.posts.map((i) => (
+                  <div key={i.id} className="flex flex-col">
+                    <ItemCard item={i} />
+                    {i.status === "active" && (
+                      <Button data-testid={`bump-item-${i.id}`}
+                        onClick={() => bumpItem(i.id)}
+                        variant="outline"
+                        className="rounded-full mt-2 border-em-border text-em-textSoft hover:text-em-primary">
+                        ⬆ Bump to top (once / 24h)
+                      </Button>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </TabsContent>
