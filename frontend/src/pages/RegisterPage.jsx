@@ -70,13 +70,13 @@ export default function RegisterPage() {
                 onChange={(e) => setForm({ ...form, zip_code: e.target.value })}
                 data-testid="register-zip-input" className="rounded-xl border-em-border" />
             </div>
-            <label className="flex items-start gap-2 text-sm text-em-textSoft cursor-pointer">
-              <Checkbox checked={agree} onCheckedChange={setAgree} data-testid="register-disclaimer-checkbox" className="mt-0.5" />
-              <span>
+            <div className="flex items-start gap-2 text-sm text-em-textSoft">
+              <Checkbox checked={agree} onCheckedChange={(v) => setAgree(!!v)} id="register-disclaimer" data-testid="register-disclaimer-checkbox" className="mt-0.5" />
+              <label htmlFor="register-disclaimer" className="cursor-pointer">
                 I am 18+ (or have parental consent) and I take full responsibility for items I post or claim.
                 I will meet in public places only.
-              </span>
-            </label>
+              </label>
+            </div>
             {err && <div data-testid="register-error" className="text-sm text-em-primary">{err}</div>}
             <Button type="submit" disabled={loading}
               data-testid="register-submit-button"
