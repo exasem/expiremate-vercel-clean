@@ -1,54 +1,46 @@
-import { useEffect } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
-import { HOME } from "@/constants/testIds";
+import { Toaster } from "@/components/ui/sonner";
+import { AuthProvider } from "@/context/AuthContext";
+import ProtectedRoute from "@/components/ProtectedRoute";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          data-testid={HOME.emergentLink}
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
+import HomePage from "@/pages/HomePage";
+import LoginPage from "@/pages/LoginPage";
+import RegisterPage from "@/pages/RegisterPage";
+import BrowsePage from "@/pages/BrowsePage";
+import ItemDetailPage from "@/pages/ItemDetailPage";
+import PostItemPage from "@/pages/PostItemPage";
+import DashboardPage from "@/pages/DashboardPage";
+import DonatePage from "@/pages/DonatePage";
+import VerifyPage from "@/pages/VerifyPage";
+import PaymentSuccessPage from "@/pages/PaymentSuccessPage";
+import LeaderboardPage from "@/pages/LeaderboardPage";
+import HowItWorksPage from "@/pages/HowItWorksPage";
+import SafetyPage from "@/pages/SafetyPage";
 
 function App() {
   return (
     <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+            <Route path="/browse" element={<BrowsePage />} />
+            <Route path="/items/:id" element={<ItemDetailPage />} />
+            <Route path="/donate" element={<DonatePage />} />
+            <Route path="/leaderboard" element={<LeaderboardPage />} />
+            <Route path="/how-it-works" element={<HowItWorksPage />} />
+            <Route path="/safety" element={<SafetyPage />} />
+            <Route path="/payment-success" element={<PaymentSuccessPage />} />
+            <Route path="/post" element={<ProtectedRoute><PostItemPage /></ProtectedRoute>} />
+            <Route path="/verify" element={<ProtectedRoute><VerifyPage /></ProtectedRoute>} />
+            <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+          </Routes>
+        </BrowserRouter>
+        <Toaster position="top-center" richColors />
+      </AuthProvider>
     </div>
   );
 }
