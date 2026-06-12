@@ -636,7 +636,9 @@ async def receipt_pdf(session_id: str, request: Request):
     tx = await db.payment_transactions.find_one({"session_id": session_id})
     if not tx or tx.get("purpose") != "donation" or tx.get("payment_status") != "paid":
         raise HTTPException(404, "Donation not found")
-    if tx.get("user_id") and str(tx["user_id"]) != str(user["_id"]) and not is_admin(user):
+    if not tx.get("user_id"):
+        raise HTTPException(404, "Donation not found")
+    if str(tx["user_id"]) != str(user["_id"]) and not is_admin(user):
         raise HTTPException(403, "Not your donation")
     pdf = build_receipt_pdf(
         donor_name=user.get("name", ""),
@@ -880,4 +882,7 @@ app.add_middleware(
 
 @app.on_event("shutdown")
 async def shutdown():
+    global _auto_expire_task
+    if _auto_expire_task:
+        _auto_expire_task.cancel()
     client.close()

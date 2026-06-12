@@ -18,37 +18,42 @@ A hyperlocal community platform where verified neighbors give unexpired-but-soon
 - **Domain model**: users, items, payment_transactions, reports
 
 ## What's been implemented (Feb 2026)
-- ✅ JWT auth: register / login / logout / me + brute-force-light protection
-- ✅ Items: post (multipart photo upload + AI moderation), list with filters, detail
-- ✅ Claim flow: 4-digit claim code, owner-confirm endpoint, status state machine (active → claimed → completed)
+- ✅ JWT auth: register / login / logout / me + password hashing
+- ✅ Email verification + password reset (Resend MOCKED — dev_link returned + admin outbox)
+- ✅ Items: post (multipart photo + AI moderation), list with filters, detail
+- ✅ Claim flow: 4-digit claim code, owner-confirm endpoint, state machine
+- ✅ In-app chat between poster + claimer (5s polling, PII phone scrub, thread closes on completion)
 - ✅ Reports endpoint
-- ✅ Stripe verify ($2) + donate ($3/$5/$10/custom up to $1000) checkout + status polling + webhook
-- ✅ Donation thermometer (live stats) + donor leaderboard
-- ✅ Image upload + public file serve via /api/files/{path}
-- ✅ Frontend: 13 routes — Home, Browse, ItemDetail, Post, Dashboard, Donate, Verify, PaymentSuccess, Leaderboard, HowItWorks, Safety, Login, Register
-- ✅ Safety disclaimer + 18+ checkbox on signup
-- ✅ Mobile-responsive sticky nav with hamburger
-- ✅ Test report iteration_1: backend 34/34 pass; frontend 85% (post-fix: title + checkbox)
+- ✅ Stripe verify ($2) + donate ($3/$5/$10/custom) checkout + status polling + webhook
+- ✅ Donation thermometer + donor leaderboard + per-user donations history + tax receipt PDF download
+- ✅ Image upload + public /api/files/{path} serve
+- ✅ Admin dashboard: overview, reports (with remove-item), users (ban/unban), email outbox
+- ✅ Auto-expire background task (FastAPI in-process, every 30min)
+- ✅ Frontend: 18 routes — Home, Browse, ItemDetail, Post, Dashboard, Donate, Verify, PaymentSuccess, Leaderboard, HowItWorks, Safety, Login, Register, Forgot/Reset/VerifyEmail, Admin
+- ✅ Safety disclaimer + 18+ checkbox
+- ✅ Mobile-responsive
+- ✅ Tests: 56/56 passing (34 MVP regression + 22 iter-2 features)
 
 ## P0 (post-launch)
-- Auto-expire items 24h after expiration_date (cron / scheduled task)
-- Email verification on signup (via Resend)
-- In-app chat between poster + claimer (no PII exchange)
-- Photo verification on the actual item against the claim code (anti-fraud)
+- Wire real Resend API for actual email sending (currently MOCKED)
+- Real Persona / Stripe Identity for ID document upload
+- Custom domain + production CORS lockdown
 
 ## P1
-- Real Persona / Stripe Identity integration for ID document upload (currently $2 fee is the safety gate; doc upload not enforced)
-- Push notifications when a new item is posted in your ZIP
-- Tax receipts for donors
-- Admin dashboard for the founder to review reports
+- Push notifications when a new item appears in your ZIP
+- Admin search/filter on users + reports
+- Bulk admin actions
+- Email enumeration timing fix on forgot-password
+- Split server.py into routers (auth/items/admin/payments/chat/donations)
 
 ## P2
 - Mobile native app (React Native)
-- Business accounts (grocery stores donate)
-- Referral system
+- Business accounts (grocery stores)
+- Referral system / "Share to unlock $1 off verify"
 - Multi-language
 
 ## Known limitations
-- Cross-site cookies may not persist on some browsers; bearer token fallback used
-- Webhook signature swallowed gracefully (returns ok:false on bad sig) — set up real webhook secret in prod
-- claim_code uses random.randint — fine for MVP, swap to secrets.randbelow for prod
+- Cross-site cookies may not persist; bearer token fallback used
+- Webhook signature handling is permissive; configure proper secret in prod
+- Email sending is MOCKED — links logged to console + visible in /admin → Outbox
+- PII scrub limited to US phone numbers
