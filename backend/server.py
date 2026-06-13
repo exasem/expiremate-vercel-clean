@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field
-from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import MongoClient
 from bson import ObjectId
 import stripe
 import openai
@@ -38,9 +38,32 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 stripe.api_key = STRIPE_API_KEY
 openai.api_key = OPENAI_API_KEY
 
-client = AsyncIOMotorClient(MONGO_URL)
+client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
 app = FastAPI(title="ExpireMate Backend")
+
+
+async def db_find_one(collection, query):
+    return await asyncio.to_thread(collection.find_one, query)
+
+
+async def db_insert_one(collection, document):
+    return await asyncio.to_thread(collection.insert_one, document)
+
+
+async def db_update_one(collection, query, update, upsert=False):
+    return await asyncio.to_thread(collection.update_one, query, update, upsert=upsert)
+
+
+async def db_find(collection, query, sort=None, limit=None):
+    def _find():
+        cursor = collection.find(query)
+        if sort:
+            cursor = cursor.sort(sort)
+        if limit:
+            cursor = cursor.limit(limit)
+        return list(cursor)
+    return await asyncio.to_thread(_find)
 
 app.add_middleware(
     CORSMiddleware,
@@ -121,7 +144,7 @@ async def get_current_user(request: Request) -> dict:
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     token_data = decode_access_token(token)
-    user = await db.users.find_one({"_id": ObjectId(token_data.user_id)})
+    user = await db_find_one(db.users, {"_id": ObjectId(token_data.user_id)})
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
@@ -166,7 +189,7 @@ async def health():
 
 @app.post("/api/auth/register")
 async def register(payload: RegisterIn):
-    existing = await db.users.find_one({"email": payload.email.lower()})
+    existing = await db_find_one(db.users, {"email": payload.email.lower()})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     user_doc = {
@@ -176,7 +199,7 @@ async def register(payload: RegisterIn):
         "verified": False,
         "created_at": datetime.utcnow().isoformat(),
     }
-    result = await db.users.insert_one(user_doc)
+    result = await db_insert_one(db.users, user_doc)
     user_doc["_id"] = result.inserted_id
     token = create_access_token({"user_id": str(result.inserted_id), "email": payload.email.lower()})
     response = JSONResponse({"user": sanitize_user(user_doc), "token": token})
@@ -186,7 +209,7 @@ async def register(payload: RegisterIn):
 
 @app.post("/api/auth/login")
 async def login(payload: LoginIn):
-    user = await db.users.find_one({"email": payload.email.lower()})
+    user = await db_find_one(db.users, {"email": payload.email.lower()})
     if not user or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     token = create_access_token({"user_id": str(user["_id"]), "email": user["email"]})
@@ -216,14 +239,14 @@ async def list_items(category: Optional[str] = None, zip_code: Optional[str] = N
         query["category"] = category
     if zip_code:
         query["zip_code"] = zip_code
-    items = await db.items.find(query).sort("created_at", -1).to_list(100)
+    items = await db_find(db.items, query, sort=[("created_at", -1)], limit=100)
     return {"items": [item_to_public(item) for item in items]}
 
 
 @app.get("/api/items/{item_id}")
 async def get_item(item_id: str, request: Request):
     try:
-        item = await db.items.find_one({"_id": ObjectId(item_id)})
+        item = await db_find_one(db.items, {"_id": ObjectId(item_id)})
     except Exception:
         raise HTTPException(status_code=404, detail="Item not found")
     if not item:
@@ -242,7 +265,7 @@ async def get_item(item_id: str, request: Request):
 @app.post("/api/items/{item_id}/claim")
 async def claim_item(item_id: str, user: dict = Depends(get_current_user)):
     try:
-        item = await db.items.find_one({"_id": ObjectId(item_id)})
+        item = await db_find_one(db.items, {"_id": ObjectId(item_id)})
     except Exception:
         item = None
     if not item:
@@ -252,7 +275,7 @@ async def claim_item(item_id: str, user: dict = Depends(get_current_user)):
     if str(item["owner_id"]) == str(user["_id"]):
         raise HTTPException(status_code=400, detail="Cannot claim your own item")
     claim_code = str(uuid.uuid4().int)[:4].zfill(4)
-    await db.items.update_one({"_id": item["_id"]}, {"$set": {
+    await db_update_one(db.items, {"_id": item["_id"]}, {"$set": {
         "status": "claimed",
         "claimed_by": user["_id"],
         "claimed_at": datetime.utcnow().isoformat(),
@@ -264,7 +287,7 @@ async def claim_item(item_id: str, user: dict = Depends(get_current_user)):
 @app.post("/api/items/{item_id}/unclaim")
 async def unclaim_item(item_id: str, user: dict = Depends(get_current_user)):
     try:
-        item = await db.items.find_one({"_id": ObjectId(item_id)})
+        item = await db_find_one(db.items, {"_id": ObjectId(item_id)})
     except Exception:
         item = None
     if not item:
@@ -273,7 +296,7 @@ async def unclaim_item(item_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Item is not claimed")
     if str(item.get("claimed_by")) != str(user["_id"]) and str(item["owner_id"]) != str(user["_id"]):
         raise HTTPException(status_code=403, detail="Not authorized")
-    await db.items.update_one({"_id": item["_id"]}, {"$set": {
+    await db_update_one(db.items, {"_id": item["_id"]}, {"$set": {
         "status": "active",
         "claimed_by": None,
         "claimed_at": None,
@@ -289,7 +312,7 @@ class ConfirmPickupIn(BaseModel):
 @app.post("/api/items/{item_id}/confirm")
 async def confirm_pickup(item_id: str, payload: ConfirmPickupIn, user: dict = Depends(get_current_user)):
     try:
-        item = await db.items.find_one({"_id": ObjectId(item_id)})
+        item = await db_find_one(db.items, {"_id": ObjectId(item_id)})
     except Exception:
         item = None
     if not item:
@@ -300,7 +323,7 @@ async def confirm_pickup(item_id: str, payload: ConfirmPickupIn, user: dict = De
         raise HTTPException(status_code=400, detail="Item is not claimed")
     if item.get("claim_code") != payload.code:
         raise HTTPException(status_code=400, detail="Invalid claim code")
-    await db.items.update_one({"_id": item["_id"]}, {"$set": {
+    await db_update_one(db.items, {"_id": item["_id"]}, {"$set": {
         "status": "completed",
         "completed_at": datetime.utcnow().isoformat(),
     }})
@@ -335,7 +358,7 @@ async def donate_checkout(payload: DonationCheckoutIn, user: Optional[dict] = De
         cancel_url=cancel_url,
         metadata={"purpose": "donation", "anonymous": str(payload.anonymous).lower(), **({"user_id": str(user["_id"])} if user else {})},
     )
-    await db.payment_transactions.insert_one({
+    await db_insert_one(db.payment_transactions, {
         "session_id": session.id,
         "purpose": "donation",
         "user_id": user["_id"] if user else None,
@@ -370,7 +393,7 @@ async def verify_checkout(payload: VerifyCheckoutIn, user: dict = Depends(get_cu
         cancel_url=cancel_url,
         metadata={"purpose": "id_verification", "user_id": str(user["_id"])},
     )
-    await db.payment_transactions.insert_one({
+    await db_insert_one(db.payment_transactions, {
         "session_id": session.id,
         "purpose": "id_verification",
         "user_id": user["_id"],
@@ -399,7 +422,7 @@ async def identity_checkout(payload: IdentityCheckoutIn, user: dict = Depends(ge
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    await db.identity_sessions.insert_one({
+    await db_insert_one(db.identity_sessions, {
         "session_id": session.id,
         "user_id": user["_id"],
         "status": session.status,
@@ -416,15 +439,15 @@ async def identity_status(session_id: str, user: dict = Depends(get_current_user
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if str(session.metadata.get("user_id")) != str(user["_id"]):
         raise HTTPException(status_code=403, detail="Not authorized")
-    await db.identity_sessions.update_one({"session_id": session_id}, {"$set": {"status": session.status, "updated_at": datetime.utcnow().isoformat()}})
+    await db_update_one(db.identity_sessions, {"session_id": session_id}, {"$set": {"status": session.status, "updated_at": datetime.utcnow().isoformat()}})
     if session.status == "verified" and not user.get("verified"):
-        await db.users.update_one({"_id": user["_id"]}, {"$set": {"verified": True, "verified_at": datetime.utcnow().isoformat()}})
+        await db_update_one(db.users, {"_id": user["_id"]}, {"$set": {"verified": True, "verified_at": datetime.utcnow().isoformat()}})
     return {"status": session.status, "last_error": getattr(session, "last_error", None)}
 
 
 @app.get("/api/payments/status/{session_id}")
 async def payment_status(session_id: str):
-    transaction = await db.payment_transactions.find_one({"session_id": session_id})
+    transaction = await db_find_one(db.payment_transactions, {"session_id": session_id})
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
     try:
@@ -433,9 +456,9 @@ async def payment_status(session_id: str):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     payment_status = getattr(session, "payment_status", "unknown")
     status_value = "complete" if payment_status == "paid" else "pending"
-    await db.payment_transactions.update_one({"session_id": session_id}, {"$set": {"payment_status": payment_status, "status": status_value, "updated_at": datetime.utcnow().isoformat()}})
+    await db_update_one(db.payment_transactions, {"session_id": session_id}, {"$set": {"payment_status": payment_status, "status": status_value, "updated_at": datetime.utcnow().isoformat()}})
     if transaction.get("purpose") == "id_verification" and payment_status == "paid" and transaction.get("user_id"):
-        await db.users.update_one({"_id": transaction["user_id"]}, {"$set": {"verified": True, "verified_at": datetime.utcnow().isoformat()}})
+        await db_update_one(db.users, {"_id": transaction["user_id"]}, {"$set": {"verified": True, "verified_at": datetime.utcnow().isoformat()}})
     return {"payment_status": payment_status, "status": status_value, "purpose": transaction.get("purpose"), "amount": transaction.get("amount")}
 
 
@@ -453,15 +476,15 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail=f"Invalid webhook payload: {exc}") from exc
     if event.type == "checkout.session.completed":
         session = event.data.object
-        await db.payment_transactions.update_one({"session_id": session.id}, {"$set": {"payment_status": session.payment_status, "updated_at": datetime.utcnow().isoformat()}})
-        transaction = await db.payment_transactions.find_one({"session_id": session.id})
+        await db_update_one(db.payment_transactions, {"session_id": session.id}, {"$set": {"payment_status": session.payment_status, "updated_at": datetime.utcnow().isoformat()}})
+        transaction = await db_find_one(db.payment_transactions, {"session_id": session.id})
         if transaction and transaction.get("purpose") == "id_verification" and session.payment_status == "paid" and transaction.get("user_id"):
-            await db.users.update_one({"_id": transaction["user_id"]}, {"$set": {"verified": True, "verified_at": datetime.utcnow().isoformat()}})
+            await db_update_one(db.users, {"_id": transaction["user_id"]}, {"$set": {"verified": True, "verified_at": datetime.utcnow().isoformat()}})
     elif event.type.startswith("identity.verification_session"):
         session = event.data.object
-        await db.identity_sessions.update_one({"session_id": session.id}, {"$set": {"status": session.status, "updated_at": datetime.utcnow().isoformat()}})
+        await db_update_one(db.identity_sessions, {"session_id": session.id}, {"$set": {"status": session.status, "updated_at": datetime.utcnow().isoformat()}})
         if session.status == "verified" and session.metadata and session.metadata.get("user_id"):
-            await db.users.update_one({"_id": ObjectId(session.metadata["user_id"])}, {"$set": {"verified": True, "verified_at": datetime.utcnow().isoformat()}})
+            await db_update_one(db.users, {"_id": ObjectId(session.metadata["user_id"])}, {"$set": {"verified": True, "verified_at": datetime.utcnow().isoformat()}})
     return {"ok": True}
 
 
