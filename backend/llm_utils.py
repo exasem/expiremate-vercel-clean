@@ -1,9 +1,10 @@
-"""Claude-powered moderation for ExpireMate item listings."""
+"""Moderation for ExpireMate item listings."""
 import os
 import json
 import logging
 import uuid
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+import asyncio
+import openai
 
 logger = logging.getLogger(__name__)
 
@@ -31,19 +32,26 @@ No other text."""
 
 async def moderate_item(title: str, description: str, category: str) -> dict:
     """Return {'allowed': bool, 'reason': str}. On failure -> allow with warning."""
-    api_key = os.environ.get("EMERGENT_LLM_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("EMERGENT_LLM_KEY")
     if not api_key:
         return {"allowed": True, "reason": "Moderation skipped (no key)"}
     try:
-        chat = LlmChat(
-            api_key=api_key,
-            session_id=f"mod-{uuid.uuid4()}",
-            system_message=SYSTEM_PROMPT,
-        ).with_model("anthropic", "claude-sonnet-4-6")
+        openai.api_key = api_key
         prompt = f"Category: {category}\nTitle: {title}\nDescription: {description}"
-        response = await chat.send_message(UserMessage(text=prompt))
-        text = response.strip() if isinstance(response, str) else str(response).strip()
-        # Pull JSON
+
+        def create_chat():
+            return openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0,
+                max_tokens=150,
+            )
+
+        response = await asyncio.to_thread(create_chat)
+        text = response.choices[0].message["content"].strip()
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end != -1:

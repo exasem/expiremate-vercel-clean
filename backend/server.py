@@ -9,9 +9,12 @@ import os
 import uuid
 import random
 import logging
+import json
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
+from dataclasses import dataclass
+from types import SimpleNamespace
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, UploadFile, File, Form
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -34,9 +37,53 @@ import asyncio
 import hashlib
 import stripe as stripe_sdk
 
-from emergentintegrations.payments.stripe.checkout import (
-    StripeCheckout, CheckoutSessionRequest,
-)
+@dataclass
+class CheckoutSessionRequest:
+    amount: float
+    currency: str
+    success_url: str
+    cancel_url: str
+    metadata: dict | None = None
+
+class StripeCheckout:
+    def __init__(self, api_key: str, webhook_url: str | None = None):
+        stripe_sdk.api_key = api_key
+        self.webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
+
+    async def create_checkout_session(self, req: CheckoutSessionRequest):
+        amount_cents = int(round(req.amount * 100))
+        session = stripe_sdk.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": req.currency,
+                    "product_data": {"name": "ExpireMate Payment"},
+                    "unit_amount": amount_cents,
+                },
+                "quantity": 1,
+            }],
+            mode="payment",
+            success_url=req.success_url,
+            cancel_url=req.cancel_url,
+            metadata=req.metadata or {},
+        )
+        return SimpleNamespace(session_id=session.id, url=session.url)
+
+    async def get_checkout_status(self, session_id: str):
+        session = stripe_sdk.checkout.Session.retrieve(session_id)
+        payment_status = getattr(session, "payment_status", "")
+        status = "complete" if payment_status == "paid" else "pending"
+        return SimpleNamespace(payment_status=payment_status, status=status)
+
+    async def handle_webhook(self, body: bytes, signature: str | None):
+        if self.webhook_secret and signature:
+            event = stripe_sdk.Webhook.construct_event(body, signature, self.webhook_secret)
+        else:
+            event = stripe_sdk.Event.construct_from(json.loads(body), stripe_sdk.api_key)
+        obj = getattr(event.data, "object", None)
+        session_id = getattr(obj, "id", "") if obj else ""
+        payment_status = getattr(obj, "payment_status", "unknown") if obj else "unknown"
+        return SimpleNamespace(payment_status=payment_status, session_id=session_id)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
