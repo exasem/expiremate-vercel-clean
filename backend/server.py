@@ -371,6 +371,12 @@ async def donate_checkout(payload: DonationCheckoutIn, user: Optional[dict] = De
     return {"url": session.url, "session_id": session.id}
 
 
+# Aliases without the /api prefix (some frontends may call these)
+@app.post("/payments/donate-checkout")
+async def donate_checkout_alias(payload: DonationCheckoutIn, user: Optional[dict] = Depends(get_current_user)):
+    return await donate_checkout(payload, user)
+
+
 @app.post("/api/payments/verify-checkout")
 async def verify_checkout(payload: VerifyCheckoutIn, user: dict = Depends(get_current_user)):
     if user.get("verified"):
@@ -406,6 +412,11 @@ async def verify_checkout(payload: VerifyCheckoutIn, user: dict = Depends(get_cu
     return {"url": session.url, "session_id": session.id}
 
 
+@app.post("/payments/verify-checkout")
+async def verify_checkout_alias(payload: VerifyCheckoutIn, user: dict = Depends(get_current_user)):
+    return await verify_checkout(payload, user)
+
+
 @app.post("/api/payments/identity-checkout")
 async def identity_checkout(payload: IdentityCheckoutIn, user: dict = Depends(get_current_user)):
     if user.get("verified"):
@@ -429,6 +440,11 @@ async def identity_checkout(payload: IdentityCheckoutIn, user: dict = Depends(ge
         "created_at": datetime.utcnow().isoformat(),
     })
     return {"url": session.url, "session_id": session.id, "status": session.status}
+
+
+@app.post("/payments/identity-checkout")
+async def identity_checkout_alias(payload: IdentityCheckoutIn, user: dict = Depends(get_current_user)):
+    return await identity_checkout(payload, user)
 
 
 @app.get("/api/payments/identity-status/{session_id}")
