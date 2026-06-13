@@ -117,13 +117,15 @@ def item_to_public(doc, viewer_id=None):
     }
 
 
-def serialize_user(user_doc: dict) -> dict:  # override (also include role/banned)
+def serialize_user(user_doc: dict) -> dict:  # override (also include role/banned/profile)
     from auth_utils import serialize_user as _orig
     base = _orig(user_doc)
     base.update({
         "role": user_doc.get("role", "user"),
         "banned": bool(user_doc.get("banned", False)),
         "email_verified": bool(user_doc.get("email_verified", False)),
+        "bio": user_doc.get("bio", ""),
+        "avatar_path": user_doc.get("avatar_path"),
     })
     return base
 
@@ -283,8 +285,7 @@ async def create_item(
 @api.post("/items/{item_id}/claim")
 async def claim_item(item_id: str, request: Request):
     user = await auth_user(request)
-    if not user.get("verified"):
-        raise HTTPException(403, "ID verification required to claim items")
+    # NOTE: verification NOT required to claim — only to post.
     try:
         oid = ObjectId(item_id)
     except Exception:
@@ -749,9 +750,283 @@ async def admin_emails(request: Request):
     return {"emails": EMAIL_LOG[:50]}
 
 
-# ---------- Auto-expire background loop ----------
-_auto_expire_task = None
+# ---------- Profiles, reviews, blocks, watchlist ----------
+class ReviewIn(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    text: str = Field(default="", max_length=600)
 
+
+class ProfileUpdateIn(BaseModel):
+    bio: Optional[str] = Field(default=None, max_length=500)
+
+
+def user_card(u: dict) -> dict:
+    return {
+        "id": str(u["_id"]),
+        "name": u.get("name", ""),
+        "verified": bool(u.get("verified")),
+        "avatar_path": u.get("avatar_path"),
+        "bio": u.get("bio", ""),
+        "joined": u.get("created_at"),
+    }
+
+
+async def _block_filter(user_id) -> dict:
+    """Return a Mongo filter clause excluding items where viewer is blocked or has blocked the owner."""
+    blocks = await db.user_blocks.find(
+        {"$or": [{"blocker_id": user_id}, {"blocked_id": user_id}]}
+    ).to_list(500)
+    blocked_user_ids = set()
+    for b in blocks:
+        blocked_user_ids.add(b["blocker_id"])
+        blocked_user_ids.add(b["blocked_id"])
+    blocked_user_ids.discard(user_id)
+    return {"owner_id": {"$nin": list(blocked_user_ids)}} if blocked_user_ids else {}
+
+
+@api.get("/users/{user_id}/profile")
+async def user_profile(user_id: str):
+    try:
+        oid = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    u = await db.users.find_one({"_id": oid})
+    if not u:
+        raise HTTPException(404, "Not found")
+    # Aggregate rating
+    pipeline = [
+        {"$match": {"reviewee_id": oid}},
+        {"$group": {"_id": None, "avg": {"$avg": "$rating"}, "count": {"$sum": 1}}},
+    ]
+    avg, count = None, 0
+    async for r in db.reviews.aggregate(pipeline):
+        avg = float(r.get("avg") or 0)
+        count = int(r.get("count") or 0)
+    rescued_posted = await db.items.count_documents({"owner_id": oid, "status": "completed"})
+    rescued_claimed = await db.items.count_documents({"claimed_by": oid, "status": "completed"})
+    return {
+        "user": user_card(u),
+        "rating_avg": round(avg, 2) if avg else None,
+        "rating_count": count,
+        "items_rescued": rescued_posted + rescued_claimed,
+    }
+
+
+@api.get("/users/{user_id}/reviews")
+async def user_reviews(user_id: str):
+    try:
+        oid = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    rows = await db.reviews.find({"reviewee_id": oid}).sort("created_at", -1).to_list(100)
+    out = []
+    for r in rows:
+        reviewer = await db.users.find_one({"_id": r["reviewer_id"]})
+        out.append({
+            "id": str(r["_id"]),
+            "rating": r["rating"],
+            "text": r.get("text", ""),
+            "created_at": r.get("created_at"),
+            "reviewer": user_card(reviewer) if reviewer else None,
+        })
+    return {"reviews": out}
+
+
+@api.post("/items/{item_id}/review")
+async def leave_review(item_id: str, body: ReviewIn, request: Request):
+    user = await auth_user(request)
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    item = await db.items.find_one({"_id": oid})
+    if not item:
+        raise HTTPException(404, "Not found")
+    if item.get("status") != "completed":
+        raise HTTPException(400, "Reviews allowed only after pickup is confirmed")
+    is_owner = str(item["owner_id"]) == str(user["_id"])
+    is_claimer = item.get("claimed_by") and str(item["claimed_by"]) == str(user["_id"])
+    if not (is_owner or is_claimer):
+        raise HTTPException(403, "Only the poster or claimer can leave a review")
+    reviewee_id = item["claimed_by"] if is_owner else item["owner_id"]
+    if not reviewee_id:
+        raise HTTPException(400, "No counterparty to review")
+    existing = await db.reviews.find_one({
+        "item_id": oid, "reviewer_id": user["_id"],
+    })
+    if existing:
+        raise HTTPException(400, "Already reviewed this pickup")
+    await db.reviews.insert_one({
+        "item_id": oid,
+        "reviewer_id": user["_id"],
+        "reviewee_id": reviewee_id,
+        "rating": body.rating,
+        "text": body.text.strip(),
+        "created_at": now_iso(),
+    })
+    return {"ok": True}
+
+
+@api.patch("/me/profile")
+async def update_profile(body: ProfileUpdateIn, request: Request):
+    user = await auth_user(request)
+    update = {}
+    if body.bio is not None:
+        update["bio"] = body.bio.strip()
+    if update:
+        await db.users.update_one({"_id": user["_id"]}, {"$set": update})
+    fresh = await db.users.find_one({"_id": user["_id"]})
+    return {"user": serialize_user(fresh)}
+
+
+@api.post("/me/avatar")
+async def upload_avatar(request: Request, photo: UploadFile = File(...)):
+    user = await auth_user(request)
+    data = await photo.read()
+    if len(data) > 3 * 1024 * 1024:
+        raise HTTPException(400, "Avatar too large (max 3MB)")
+    ext = (photo.filename.split(".")[-1] if photo.filename and "." in photo.filename else "jpg").lower()
+    path = f"{APP_NAME}/avatars/{str(user['_id'])}/{uuid.uuid4()}.{ext}"
+    try:
+        result = put_object(path, data, photo.content_type or "image/jpeg")
+        await db.users.update_one({"_id": user["_id"]}, {"$set": {"avatar_path": result["path"]}})
+    except Exception as e:
+        logger.error(f"avatar upload failed: {e}")
+        raise HTTPException(500, "Upload failed")
+    fresh = await db.users.find_one({"_id": user["_id"]})
+    return {"user": serialize_user(fresh)}
+
+
+# ---------- Block / unblock ----------
+@api.post("/users/{user_id}/block")
+async def block_user(user_id: str, request: Request):
+    me = await auth_user(request)
+    try:
+        target = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    if str(target) == str(me["_id"]):
+        raise HTTPException(400, "Can't block yourself")
+    await db.user_blocks.update_one(
+        {"blocker_id": me["_id"], "blocked_id": target},
+        {"$setOnInsert": {"blocker_id": me["_id"], "blocked_id": target,
+                          "created_at": now_iso()}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api.delete("/users/{user_id}/block")
+async def unblock_user(user_id: str, request: Request):
+    me = await auth_user(request)
+    try:
+        target = ObjectId(user_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    await db.user_blocks.delete_one({"blocker_id": me["_id"], "blocked_id": target})
+    return {"ok": True}
+
+
+@api.get("/me/blocks")
+async def my_blocks(request: Request):
+    me = await auth_user(request)
+    rows = await db.user_blocks.find({"blocker_id": me["_id"]}).to_list(200)
+    out = []
+    for r in rows:
+        u = await db.users.find_one({"_id": r["blocked_id"]})
+        if u:
+            out.append(user_card(u))
+    return {"blocks": out}
+
+
+# ---------- Watchlist ----------
+@api.post("/items/{item_id}/watch")
+async def watch_item(item_id: str, request: Request):
+    me = await auth_user(request)
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    await db.watches.update_one(
+        {"user_id": me["_id"], "item_id": oid},
+        {"$setOnInsert": {"user_id": me["_id"], "item_id": oid,
+                          "created_at": now_iso()}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api.delete("/items/{item_id}/watch")
+async def unwatch_item(item_id: str, request: Request):
+    me = await auth_user(request)
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    await db.watches.delete_one({"user_id": me["_id"], "item_id": oid})
+    return {"ok": True}
+
+
+@api.get("/me/watchlist")
+async def my_watchlist(request: Request):
+    me = await auth_user(request)
+    rows = await db.watches.find({"user_id": me["_id"]}).sort("created_at", -1).to_list(200)
+    items = []
+    for w in rows:
+        it = await db.items.find_one({"_id": w["item_id"]})
+        if it:
+            items.append(item_to_public(it, str(me["_id"])))
+    return {"items": items}
+
+
+# ---------- Pickup reminder background loop ----------
+_reminder_task = None
+
+
+async def _pickup_reminder_loop():
+    """Email both parties if an item has been claimed >24h with no confirm."""
+    while True:
+        try:
+            cutoff = (now_utc() - timedelta(hours=24)).isoformat()
+            cursor = db.items.find({
+                "status": "claimed",
+                "claimed_at": {"$lt": cutoff},
+                "reminder_sent_at": {"$exists": False},
+            })
+            frontend = os.environ.get("FRONTEND_URL", "").rstrip("/") or "https://expiremate.com"
+            async for it in cursor:
+                owner = await db.users.find_one({"_id": it["owner_id"]})
+                claimer = await db.users.find_one({"_id": it["claimed_by"]}) if it.get("claimed_by") else None
+                link = f"{frontend}/items/{it['_id']}"
+                for u in [owner, claimer]:
+                    if not u or u.get("banned"):
+                        continue
+                    try:
+                        await asyncio.to_thread(send_email,
+                            to=u["email"],
+                            subject=f"Reminder: pickup pending for '{it.get('title','item')}'",
+                            html=render_action_email(
+                                heading="Did the pickup happen?",
+                                body=f"It's been a day since this item was claimed. If you've met up, confirm the pickup with the 4-digit code. Otherwise, message the other party in the in-app chat.",
+                                cta_text="Open pickup page",
+                                cta_url=link,
+                            ),
+                            link=link,
+                        )
+                    except Exception as e:
+                        logger.warning(f"reminder email failed: {e}")
+                await db.items.update_one(
+                    {"_id": it["_id"]},
+                    {"$set": {"reminder_sent_at": now_iso()}},
+                )
+        except Exception as e:
+            logger.error(f"[pickup-reminder] {e}")
+        await asyncio.sleep(60 * 60)  # 1 hour
+
+
+
+
+_auto_expire_task = None
 stripe_sdk.api_key = os.environ.get("STRIPE_API_KEY", "")
 
 
@@ -1067,6 +1342,10 @@ async def on_startup():
     await db.payment_transactions.create_index("session_id", unique=True)
     await db.messages.create_index([("item_id", 1), ("created_at", 1)])
     await db.email_tokens.create_index("token", unique=True)
+    await db.reviews.create_index([("reviewee_id", 1), ("created_at", -1)])
+    await db.reviews.create_index([("item_id", 1), ("reviewer_id", 1)], unique=True)
+    await db.user_blocks.create_index([("blocker_id", 1), ("blocked_id", 1)], unique=True)
+    await db.watches.create_index([("user_id", 1), ("item_id", 1)], unique=True)
     init_storage()
 
     admin_em = admin_email()
@@ -1088,8 +1367,9 @@ async def on_startup():
             {"$set": {"role": "admin", "verified": True, "email_verified": True}},
         )
 
-    global _auto_expire_task
+    global _auto_expire_task, _reminder_task
     _auto_expire_task = asyncio.create_task(_auto_expire_loop())
+    _reminder_task = asyncio.create_task(_pickup_reminder_loop())
 
     try:
         Path("/app/memory").mkdir(exist_ok=True)
@@ -1132,7 +1412,9 @@ app.add_middleware(
 
 @app.on_event("shutdown")
 async def shutdown():
-    global _auto_expire_task
+    global _auto_expire_task, _reminder_task
     if _auto_expire_task:
         _auto_expire_task.cancel()
+    if _reminder_task:
+        _reminder_task.cancel()
     client.close()

@@ -15,6 +15,8 @@ import { toast } from "sonner";
 import ItemChat from "@/components/ItemChat";
 import ShareButtons from "@/components/ShareButtons";
 import TipJar from "@/components/TipJar";
+import WatchButton from "@/components/WatchButton";
+import ReviewModal from "@/components/ReviewModal";
 
 export default function ItemDetailPage() {
   const { id } = useParams();
@@ -37,7 +39,6 @@ export default function ItemDetailPage() {
 
   const claim = async () => {
     if (!user) return nav("/login", { state: { from: `/items/${id}` } });
-    if (!user.verified) return nav("/verify");
     try {
       const { data } = await api.post(`/items/${id}/claim`);
       setClaimCode(data.claim_code);
@@ -101,7 +102,11 @@ export default function ItemDetailPage() {
               <div className="flex items-center gap-2"><Clock className="w-4 h-4 text-em-primary" /> Expires: <strong>{item.expiration_date}</strong></div>
               <div className="flex items-center gap-2"><MapPin className="w-4 h-4 text-em-secondary" /> ZIP {item.zip_code}</div>
               <div className="flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-em-secondary" /> {item.meetup_suggestion}</div>
-              <div className="text-em-textSoft">Quantity: {item.quantity} · Posted by {item.owner_name}</div>
+              <div className="text-em-textSoft">Quantity: {item.quantity} · Posted by <Link to={`/users/${item.owner_id}`} className="text-em-text hover:text-em-primary font-medium underline-offset-2 hover:underline">{item.owner_name}</Link></div>
+            </div>
+
+            <div className="flex items-center gap-2 mb-4">
+              <WatchButton itemId={item.id} />
             </div>
 
             {/* Actions */}
@@ -141,8 +146,15 @@ export default function ItemDetailPage() {
 
             {item.status === "completed" && (
               <div className="em-card p-5 mt-4 border-em-secondary border-2">
-                <div className="font-heading font-semibold text-em-secondary">Item rescued ✓</div>
-                <div className="text-sm text-em-textSoft">This food/item was saved from the landfill. Thank you.</div>
+                <div className="font-heading font-semibold text-em-secondary mb-2">Item rescued ✓</div>
+                <div className="text-sm text-em-textSoft mb-3">This food/item was saved from the landfill. Thank you.</div>
+                {(item.is_owner || item.is_claimer) && (
+                  <ReviewModal
+                    itemId={item.id}
+                    counterpartyName={item.is_owner ? "the claimer" : item.owner_name}
+                    onSubmitted={refresh}
+                  />
+                )}
               </div>
             )}
 

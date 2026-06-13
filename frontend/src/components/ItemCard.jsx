@@ -11,6 +11,12 @@ function daysUntil(iso) {
   return diff;
 }
 
+function isFresh(createdIso) {
+  if (!createdIso) return false;
+  const created = new Date(createdIso);
+  return (Date.now() - created.getTime()) < 2 * 60 * 60 * 1000; // <2h
+}
+
 export default function ItemCard({ item }) {
   const days = daysUntil(item.expiration_date);
   const urgent = days !== null && days <= 2;
@@ -41,6 +47,11 @@ export default function ItemCard({ item }) {
           <span className="bg-white/95 text-xs font-medium px-2.5 py-1 rounded-full text-em-text">
             {item.category}
           </span>
+          {isFresh(item.created_at) && (
+            <span data-testid="fresh-badge" className="bg-em-primary text-white text-xs font-semibold px-2.5 py-1 rounded-full uppercase tracking-wide animate-pulse">
+              Fresh
+            </span>
+          )}
         </div>
         {item.status !== "active" && (
           <div className="absolute top-3 right-3 bg-em-secondary text-white text-xs font-semibold px-2.5 py-1 rounded-full uppercase tracking-wide">

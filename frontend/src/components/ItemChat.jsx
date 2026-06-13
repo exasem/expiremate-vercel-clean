@@ -66,14 +66,26 @@ export default function ItemChat({ itemId, currentUserId }) {
         })}
         <div ref={bottomRef} />
       </div>
-      <form onSubmit={send} className="px-3 py-3 border-t border-em-border flex gap-2 bg-em-bg">
-        <Input value={text} onChange={(e) => setText(e.target.value)}
-          data-testid="chat-input" placeholder="Type a message…"
-          className="rounded-full border-em-border bg-white" />
-        <Button data-testid="chat-send-button" disabled={sending || !text.trim()}
-          type="submit" className="rounded-full bg-em-secondary hover:bg-em-secondaryHover">
-          <Send className="w-4 h-4" />
-        </Button>
+      <form onSubmit={send} className="px-3 pt-2 pb-3 border-t border-em-border bg-em-bg">
+        <div className="flex gap-1.5 mb-2 flex-wrap">
+          {["On my way 🚗", "5 min out", "I'm here", "Can we meet tomorrow?", "Thanks!"].map((tpl) => (
+            <button key={tpl} type="button"
+              onClick={() => setText(tpl)}
+              data-testid={`chat-quick-${tpl.slice(0, 5)}`}
+              className="text-xs bg-white border border-em-border hover:border-em-primary hover:text-em-primary rounded-full px-2.5 py-1">
+              {tpl}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <Input value={text} onChange={(e) => setText(e.target.value)}
+            data-testid="chat-input" placeholder="Type a message…"
+            className="rounded-full border-em-border bg-white" />
+          <Button data-testid="chat-send-button" disabled={sending || !text.trim()}
+            type="submit" className="rounded-full bg-em-secondary hover:bg-em-secondaryHover">
+            <Send className="w-4 h-4" />
+          </Button>
+        </div>
       </form>
     </div>
   );

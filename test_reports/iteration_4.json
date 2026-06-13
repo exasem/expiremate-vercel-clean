@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration-4 testing for ExpireMate (profiles + reviews + blocks + watchlist + avatar/bio + unverified-claim + pickup reminder loop + CAD currency + LIVE Stripe). Backend: 94/94 pytest pass — 74 prior regression + 20 new iter-4. Verified: unverified user CAN POST /api/items/{id}/claim and gets a claim_code; unverified user CANNOT POST /api/items (403); GET /api/users/{id}/profile returns {user, rating_avg, rating_count, items_rescued}; GET /api/users/{id}/reviews returns list with reviewer card; POST /api/items/{id}/review enforces status=='completed' (400 otherwise), participant-only (403 for non-participant), rating 1-5 (rejects 0/6/'abc'), once-per-(item,reviewer) (400 dup); reviewee_id correctly assigned (poster->claimer, claimer->poster); PATCH /api/me/profile updates bio and GET /api/auth/me reflects bio + avatar_path keys; POST /api/me/avatar succeeds with object storage and sets user.avatar_path; block self => 400, block/unblock + /me/blocks roundtrip works and is idempotent; watch + unwatch + /me/watchlist roundtrip with single-doc idempotency (upsert verified at DB level); _pickup_reminder_loop body run directly marks reminder_sent_at and pushes 2 EMAIL_LOG entries (one per party); POST /api/payments/donate-checkout returns a real checkout.stripe.com URL (LIVE key wired, NOT paid) and the payment_transactions doc has currency:'cad'. Frontend: Navbar dropdown has 'My profile' (data-testid='menu-profile'); Dashboard exposes new 'watchlist' tab (data-testid='dashboard-tab-watchlist'); EditProfileCard renders bio textarea + avatar input + save button (testids: profile-bio-input, avatar-input, profile-save-button); ProfilePage renders edit + star rating + items rescued count, block button correctly hidden when viewing own profile; ItemDetail shows watch-button when logged in, owner name links to /users/{owner_id}, Fresh badge visible on a recent item. All required data-testid present.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Navbar dropdown + VerifyPage", "issues": ["Currency switched to CAD on backend but FE still labels the fee as '$2' (Navbar: 'Verify ID ($2)', VerifyPage h1: 'Verify your ID — $2 one-time'). To match the CAD switch, update copy to 'CA$2' or 'C$2' so Canadian users understand the currency."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter4_features.py",
+    "/app/backend/tests/test_iter3_features.py",
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter4_results.xml",
+    "/app/test_reports/pytest/iter4_full_regression.xml"
+  ],
+  "action_items": [
+    "[Minor copy] Update FE labels in Navbar (`<DropdownMenuItem data-testid='menu-verify'>Verify ID ($2)</...>`) and VerifyPage h1/CTA from '$2' to 'CA$2' (or 'C$2') so currency matches the new CAD backend.",
+    "[Optional] server.py is now 1421 lines — still exceeds 700-line guideline; split into routers (auth, items, admin, payments, chat, donations, push, stats, subscriptions, profiles, reviews, watchlist, blocks). Same finding as iter-2/iter-3.",
+    "[Optional] /me/avatar uses object storage put_object; on failure returns 500 (generic). Consider richer error mapping (413 for too-large, 415 for bad mime).",
+    "[Optional] Reviews endpoint /api/items/{id}/review uses ge=1/le=5 in Pydantic — returns 422 on bad rating, which is fine but tests had to accept both 400 and 422. Document expected status.",
+    "[Optional] /api/users/{id}/reviews returns up to 100 reviews with NO pagination — add ?limit/?cursor for users with many reviews.",
+    "[Optional] _pickup_reminder_loop has no shutdown-cancel symmetry (same as _auto_expire_loop). Pre-existing finding.",
+    "[Optional] Confirm Stripe webhook handler also writes/expects 'cad' transactions — not validated here because the brief explicitly forbids completing payment."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1421 lines (was 1135 in iter-3) — still violates the 700-line guideline. Refactor into routers now before it grows further.",
+    "_pickup_reminder_loop catches all exceptions and logs only — if Mongo or email backend silently fails, the loop happily marks reminder_sent_at and you never re-attempt. Recommend: only set reminder_sent_at when at least one email succeeded, or store reminder_send_attempts counter.",
+    "POST /items/{id}/review: rating validation runs at Pydantic schema level (returns 422). The error message is generic; consider a humanized 400 with 'Rating must be between 1 and 5'.",
+    "user_card() returns bio/avatar_path/joined for any user lookup — fine, but the bio + avatar_path appear in /users/{id}/reviews response for the reviewer, which means a blocked user's bio could still leak via the review reviewer card. Consider scrubbing user_card when context is a public review.",
+    "block_user only blocks one direction (blocker -> blocked); _block_filter does correctly filter both directions for browse/items list, but chat and item-detail endpoints do not appear to apply _block_filter — a blocked user can still open and message an item posted by the blocker. Recommend hooking _block_filter into /items/{id} GET and chat sends.",
+    "Watch endpoint allows watching one's own item (no owner-self check) — minor UX bug; either filter out in /me/watchlist or block at POST time.",
+    "Avatar upload sets user.avatar_path but does NOT delete the previous file from object storage — orphan growth over time. Recommend: track old path and delete after successful upload.",
+    "CURRENCY constant is hard-coded to 'cad'. If you ever support multi-currency users, this becomes a region/checkout-side decision. Acceptable for v1."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter4_features.py (new — 20 tests for iter-4 features)"
+  ],
+  "success_rate": {"backend": "100% (94/94 — 34 backend_test + 22 test_new_features + 18 test_iter3_features + 20 test_iter4_features)", "frontend": "100% on required data-testid (menu-profile, dashboard-tab-watchlist, profile-bio-input, avatar-input, profile-save-button, profile-edit-button, watch-button, fresh-badge, item-card-*, owner /users/ link). Quick-reply chat chips not exercised at runtime because the active items in DB at test time were not in 'claimed' state with current admin as participant — markup confirmed in source via grep (chat-quick-* testids)."},
+  "test_credentials": "Admin: admin@expiremate.com / ExpireMate2026!  |  Per-run: iter4poster_<ts>, iter4claim_<ts>, iter4unver_<ts> @expiremate.com / Test1234 (poster + claimer auto-flipped verified=True via Mongo).",
+  "seed_data_creation": "Tests create fresh per-run users (3 each run) and several items with unique random photo bytes. Test-created items remain in DB. No production data modified. Reviews collection grows by ~2/run; watch + block docs cleaned up by the test deletes.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Four regression suites now: /app/backend/tests/{backend_test.py, test_new_features.py, test_iter3_features.py, test_iter4_features.py}. Run all with `REACT_APP_BACKEND_URL=<url> MONGO_URL=<url> DB_NAME=<name> pytest /app/backend/tests/ -v` (~2 minutes). CRITICAL: any new test that POSTs /api/items MUST use random photo bytes (b'\\xff\\xd8\\xff\\xd9' + os.urandom(512) + str(time.time_ns()).encode()) because photo SHA-256 dedup is enforced globally. Valid categories: Food, Sealed Medicine, Pet, Cleaning, Other (NOT 'produce'). The /api/items endpoint uses Form fields title/description/category/expiration_date/quantity/zip_code/meetup_suggestion + UploadFile photo, and returns {'item': {...}} not direct item. /api/payments/donate-checkout requires preset in {'three','five','ten'} OR preset='custom'+custom_amount and origin_url. Stripe is LIVE (sk_live_); checkout URLs are produced but DO NOT pay. Currency in payment_transactions doc is 'cad'.",
+  "rca of the issue": "No production code bugs found. Test-side fixes I applied to my own iter-4 file before final pass: (a) wrong category 'produce' -> 'Food' (CATEGORIES whitelist), (b) wrong Form field names 'pickup_address'/'pickup_window' -> 'meetup_suggestion', (c) wrong response unwrap r.json()['id'] -> r.json()['item']['id'], (d) wrong donate-checkout payload — needed preset='five' + origin_url. Only design concerns to flag: (1) FE copy still says '$2' for the verification fee even though backend currency switched to CAD — recommend showing 'CA$2'. (2) Block enforcement may not extend to /items/{id} GET or chat send paths (verified _block_filter only used in browse list)."
+}

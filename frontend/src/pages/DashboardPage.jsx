@@ -7,6 +7,7 @@ import Footer from "@/components/Footer";
 import ItemCard from "@/components/ItemCard";
 import StreakBadges from "@/components/StreakBadges";
 import BrowserPushOptIn from "@/components/BrowserPushOptIn";
+import EditProfileCard from "@/components/EditProfileCard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ShieldCheck, ShieldOff, Plus, Download, Mail } from "lucide-react";
@@ -17,11 +18,13 @@ export default function DashboardPage() {
   const { user } = useAuth();
   const [data, setData] = useState({ posts: [], claims: [] });
   const [donations, setDonations] = useState([]);
+  const [watchlist, setWatchlist] = useState([]);
   const [sendingVerify, setSendingVerify] = useState(false);
 
   useEffect(() => {
     api.get("/me/items").then((r) => setData(r.data)).catch(() => {});
     api.get("/me/donations").then((r) => setDonations(r.data.donations)).catch(() => {});
+    api.get("/me/watchlist").then((r) => setWatchlist(r.data.items)).catch(() => {});
   }, []);
 
   const sendEmailVerify = async () => {
@@ -98,6 +101,7 @@ export default function DashboardPage() {
 
         <Tabs defaultValue="posts">
           <StreakBadges />
+          <EditProfileCard />
           <TabsList className="bg-em-bg border border-em-border rounded-full p-1">
             <TabsTrigger value="posts" data-testid="dashboard-tab-posts" className="rounded-full data-[state=active]:bg-em-primary data-[state=active]:text-white">
               My posts ({data.posts.length})
@@ -107,6 +111,9 @@ export default function DashboardPage() {
             </TabsTrigger>
             <TabsTrigger value="donations" data-testid="dashboard-tab-donations" className="rounded-full data-[state=active]:bg-em-primary data-[state=active]:text-white">
               Donations ({donations.length})
+            </TabsTrigger>
+            <TabsTrigger value="watchlist" data-testid="dashboard-tab-watchlist" className="rounded-full data-[state=active]:bg-em-primary data-[state=active]:text-white">
+              Watchlist ({watchlist.length})
             </TabsTrigger>
           </TabsList>
 
@@ -160,6 +167,18 @@ export default function DashboardPage() {
                     </Button>
                   </div>
                 ))}
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="watchlist" className="mt-6">
+            {watchlist.length === 0 ? (
+              <div className="em-card p-12 text-center text-em-textSoft">
+                No watched items yet — tap the eye icon on any item to follow it.
+              </div>
+            ) : (
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                {watchlist.map((i) => <ItemCard key={i.id} item={i} />)}
               </div>
             )}
           </TabsContent>

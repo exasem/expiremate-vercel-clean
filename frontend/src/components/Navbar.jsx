@@ -61,6 +61,7 @@ export default function Navbar() {
               <DropdownMenuContent align="end" className="w-52">
                 <DropdownMenuLabel className="font-heading">{user.email}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem data-testid="menu-profile" onClick={() => nav(`/users/${user.id}`)}>My profile</DropdownMenuItem>
                 <DropdownMenuItem data-testid="menu-dashboard" onClick={() => nav("/dashboard")}>Dashboard</DropdownMenuItem>
                 <DropdownMenuItem data-testid="menu-post-item" onClick={() => nav("/post")}>Post an item</DropdownMenuItem>
                 {!user.verified && (

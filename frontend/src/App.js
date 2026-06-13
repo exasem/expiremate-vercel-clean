@@ -22,6 +22,7 @@ import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import VerifyEmailPage from "@/pages/VerifyEmailPage";
 import IdentityReturnPage from "@/pages/IdentityReturnPage";
+import ProfilePage from "@/pages/ProfilePage";
 
 function App() {
   return (
@@ -34,6 +35,7 @@ function App() {
             <Route path="/register" element={<RegisterPage />} />
             <Route path="/browse" element={<BrowsePage />} />
             <Route path="/items/:id" element={<ItemDetailPage />} />
+            <Route path="/users/:userId" element={<ProfilePage />} />
             <Route path="/donate" element={<DonatePage />} />
             <Route path="/leaderboard" element={<LeaderboardPage />} />
             <Route path="/how-it-works" element={<HowItWorksPage />} />
